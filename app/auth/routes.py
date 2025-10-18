@@ -1,5 +1,8 @@
+import logging
 import re
 
+from disposable_email_domains import blocklist
+from email_validator import EmailNotValidError, validate_email
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from app.auth.schemas import UserLogin, UserRegister
@@ -7,13 +10,14 @@ from app.db.connection import get_connection
 from app.utils.hashing import get_password_hash, verify_password
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 @router.post("/register")
 def register(user: UserRegister):
     conn = None
     cur = None
 
-    email = (user.email or "").strip()
+    raw_email = (user.email or "").strip()
     name = (user.name or "").strip()
     password = user.password or ""
 
@@ -22,9 +26,33 @@ def register(user: UserRegister):
         r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$"
     )
 
-    if not email or not email_pattern.match(email):
+    if not raw_email or not email_pattern.match(raw_email):
         return JSONResponse(
             status_code=400, content={"error": "Invalid email format"}
+        )
+
+    try:
+        validated_email = validate_email(raw_email, check_deliverability=False)
+        email = validated_email.email
+        domain = validated_email.domain.lower()
+    except EmailNotValidError as exc:
+        logger.warning("Invalid email format provided: %s", exc)
+        return JSONResponse(
+            status_code=400, content={"error": "Invalid email format"}
+        )
+
+    if domain in blocklist:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Disposable or fake email not allowed"},
+        )
+
+    try:
+        validate_email(email, check_deliverability=True)
+    except EmailNotValidError as exc:
+        logger.warning("Email domain not reachable: %s", exc)
+        return JSONResponse(
+            status_code=400, content={"error": "Email domain not reachable"}
         )
 
     if not password_pattern.match(password):
@@ -52,7 +80,8 @@ def register(user: UserRegister):
         conn.commit()
 
         return {"message": "User registered successfully"}
-    except Exception:
+    except Exception as exc:
+        logger.exception("Unexpected error during registration: %s", exc)
         if conn:
             conn.rollback()
         return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
