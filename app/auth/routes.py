@@ -1,11 +1,10 @@
 import re
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from app.auth.schemas import UserLogin, UserRegister, Token
+from app.auth.schemas import UserLogin, UserRegister
 from app.db.connection import get_connection
 from app.utils.hashing import get_password_hash, verify_password
-from app.core.security import create_access_token
 
 router = APIRouter()
 
@@ -63,17 +62,36 @@ def register(user: UserRegister):
         if conn:
             conn.close()
 
-@router.post("/login", response_model=Token)
+@router.post("/login")
 def login(user: UserLogin):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT password FROM users WHERE email=%s", (user.email,))
-    db_user = cur.fetchone()
-    cur.close()
-    conn.close()
+    conn = None
+    cur = None
 
-    if not db_user or not verify_password(user.password, db_user[0]):
-        raise HTTPException(status_code=401, detail="Credenciales inválidas")
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
 
-    token = create_access_token({"sub": user.email})
-    return {"access_token": token, "token_type": "bearer"}
+        cur.execute(
+            "SELECT hashed_password FROM users WHERE email=%s",
+            (user.email,),
+        )
+        db_user = cur.fetchone()
+
+        if not db_user:
+            return JSONResponse(
+                status_code=400, content={"error": "Invalid credentials"}
+            )
+
+        if not verify_password(user.password, db_user[0]):
+            return JSONResponse(
+                status_code=400, content={"error": "Invalid credentials"}
+            )
+
+        return JSONResponse(status_code=200, content={"message": "Login successful"})
+    except Exception:
+        return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
