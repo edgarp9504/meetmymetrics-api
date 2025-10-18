@@ -16,8 +16,8 @@ def register(user: UserRegister):
         raise HTTPException(status_code=400, detail="El usuario ya existe")
 
     hashed_pw = get_password_hash(user.password)
-    cur.execute("INSERT INTO users (email, password, name) VALUES (%s, %s, %s)",
-                (user.email, hashed_pw, user.name))
+    cur.execute("INSERT INTO users (email, hashed_password, name) VALUES (%s, %s, %s)",
+            (user.email, hashed_pw, user.name))
     conn.commit()
     cur.close()
     conn.close()
