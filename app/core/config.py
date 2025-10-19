@@ -11,9 +11,11 @@ class Settings:
             credential = DefaultAzureCredential()
             client = SecretClient(vault_url=self.vault_uri, credential=credential)
             self.database_url = client.get_secret("POSTGRES-URI").value
-            self.jwt_secret = client.get_secret("JWT-SECRET").value
+            self.google_client_id = client.get_secret("GOOGLE-CLIENT-ID").value
+            self.google_client_secret = client.get_secret("GOOGLE-CLIENT-SECRET").value
         else:
             self.database_url = os.getenv("POSTGRES_CONNECTION_STRING")
-            self.jwt_secret = os.getenv("JWT_SECRET")
+            self.google_client_id = os.getenv("GOOGLE_CLIENT_ID")
+            self.google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
 
 settings = Settings()

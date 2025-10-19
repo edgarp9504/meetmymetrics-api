@@ -42,9 +42,9 @@ Define las siguientes variables antes de iniciar la aplicación:
 | `ENV` | Nombre del entorno (por defecto `dev`). |
 | `POSTGRES_CONNECTION_STRING` | Cadena de conexión a PostgreSQL en formato `postgresql://user:pass@host:port/db` cuando no se use Key Vault. |
 | `JWT_SECRET` | Clave secreta para firmar tokens JWT cuando no se use Key Vault. |
-| `KEY_VAULT_URI` | (Opcional) URI del Azure Key Vault que expone los secretos `POSTGRES-URI` y `JWT-SECRET`. |
+| `KEY_VAULT_URI` | (Opcional) URI del Azure Key Vault que expone los secretos `POSTGRES-URI`. |
 
-Si `KEY_VAULT_URI` está definida, la aplicación obtendrá `POSTGRES-URI` y `JWT-SECRET` automáticamente desde el Key Vault usando `DefaultAzureCredential`; en caso contrario se emplearán las variables locales `POSTGRES_CONNECTION_STRING` y `JWT_SECRET`.
+Si `KEY_VAULT_URI` está definida, la aplicación obtendrá `POSTGRES-URI` y automáticamente desde el Key Vault usando `DefaultAzureCredential`; en caso contrario se emplearán las variables locales `POSTGRES_CONNECTION_STRING` y `JWT_SECRET`.
 
 ## ▶️ Ejecución local
 
