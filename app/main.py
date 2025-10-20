@@ -10,7 +10,7 @@ origins = [
     "https://localhost:8080",
     "https://meetmymetrics.vercel.app",
     "https://meetmymetrics.net",
-    "https://lemon-grass-075d5c610.3.azurestaticapps.net"
+    "https://lemon-grass-075d5c610.3.azurestaticapps.net",
 ]
 
 app.add_middleware(
