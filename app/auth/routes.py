@@ -3,13 +3,14 @@ import re
 from datetime import datetime, timedelta, timezone
 
 import jwt
+from jwt import InvalidTokenError
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from disposable_email_domains import blocklist
 from email_validator import EmailNotValidError, validate_email
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 
-from app.auth.schemas import UserLogin, UserRegister
+from app.auth.schemas import UpdatePasswordRequest, UserLogin, UserRegister
 from app.core.config import settings
 from app.core.security import create_access_token
 from app.db.connection import get_connection
@@ -167,6 +168,66 @@ def login(user: UserLogin):
             media_type="application/json",
             content={"error": "Internal Server Error"},
         )
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@router.put("/update-password")
+def update_password(
+    payload: UpdatePasswordRequest, authorization: str = Header(default=None)
+):
+    if not authorization or not authorization.startswith("Bearer "):
+        return JSONResponse(status_code=401, content={"error": "Not authenticated"})
+
+    token = authorization.split("Bearer ", 1)[1].strip()
+    try:
+        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        user_id = decoded_token.get("user_id")
+        if not user_id:
+            raise ValueError("Missing user_id in token")
+    except jwt.ExpiredSignatureError:
+        return JSONResponse(status_code=401, content={"error": "Token expired"})
+    except (InvalidTokenError, ValueError):
+        return JSONResponse(status_code=401, content={"error": "Invalid token"})
+
+    if payload.new_password != payload.confirm_password:
+        return JSONResponse(
+            status_code=400, content={"error": "Passwords do not match"}
+        )
+
+    conn = None
+    cur = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT hashed_password FROM users WHERE id=%s", (user_id,))
+        row = cur.fetchone()
+
+        if not row or not row[0]:
+            return JSONResponse(status_code=404, content={"error": "User not found"})
+
+        if not verify_password(payload.current_password, row[0]):
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Current password is incorrect"},
+            )
+
+        new_hashed_password = get_password_hash(payload.new_password)
+        cur.execute(
+            "UPDATE users SET hashed_password=%s WHERE id=%s",
+            (new_hashed_password, user_id),
+        )
+        conn.commit()
+
+        return JSONResponse(status_code=200, content={"message": "Password updated"})
+    except Exception as exc:
+        logger.exception("Unexpected error during password update: %s", exc)
+        if conn:
+            conn.rollback()
+        return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
     finally:
         if cur:
             cur.close()
