@@ -1,6 +1,8 @@
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 
+import jwt
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from disposable_email_domains import blocklist
 from email_validator import EmailNotValidError, validate_email
@@ -15,6 +17,8 @@ from app.utils.hashing import get_password_hash, verify_password
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+SECRET_KEY = "super_secret_key"
 
 oauth = OAuth()
 GOOGLE_OAUTH_ENABLED = bool(
@@ -106,6 +110,63 @@ def register(user: UserRegister):
         if conn:
             conn.rollback()
         return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@router.post("/login")
+def login(user: UserLogin):
+    conn = None
+    cur = None
+
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, email, hashed_password FROM users WHERE email=%s",
+            (user.email,),
+        )
+        row = cur.fetchone()
+
+        if not row:
+            return JSONResponse(
+                status_code=400,
+                media_type="application/json",
+                content={"message": "Invalid credentials"},
+            )
+
+        user_id, email, hashed_password = row
+
+        if not verify_password(user.password, hashed_password):
+            return JSONResponse(
+                status_code=400,
+                media_type="application/json",
+                content={"message": "Invalid credentials"},
+            )
+
+        expiration = datetime.now(timezone.utc) + timedelta(hours=8)
+        payload = {"sub": email, "user_id": user_id, "exp": expiration}
+        token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+        return JSONResponse(
+            status_code=200,
+            media_type="application/json",
+            content={
+                "message": "Login successful",
+                "token": token,
+                "user": {"id": user_id, "email": email},
+            },
+        )
+    except Exception as exc:
+        logger.exception("Unexpected error during login: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            media_type="application/json",
+            content={"error": "Internal Server Error"},
+        )
     finally:
         if cur:
             cur.close()
