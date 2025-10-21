@@ -1,20 +1,24 @@
 import logging
-import re
+import random
 from datetime import datetime, timedelta, timezone
 
 import jwt
 from jwt import InvalidTokenError
 from authlib.integrations.starlette_client import OAuth, OAuthError
-from disposable_email_domains import blocklist
-from email_validator import EmailNotValidError, validate_email
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 
-from app.auth.schemas import UpdatePasswordRequest, UserLogin, UserRegister
+from app.auth.schemas import (
+    UpdatePasswordRequest,
+    UserLogin,
+    UserRegister,
+    VerifyCodeRequest,
+)
 from app.core.config import settings
 from app.core.security import create_access_token
 from app.db.connection import get_connection
 from app.utils.hashing import get_password_hash, verify_password
+from app.utils.email import send_verification_email
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -43,71 +47,117 @@ def register(user: UserRegister):
     conn = None
     cur = None
 
-    raw_email = (user.email or "").strip()
-    name = (user.name or "").strip()
-    password = user.password or ""
-
-    email_pattern = re.compile(r"^[^@\s]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$")
-    password_pattern = re.compile(
-        r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$"
-    )
-
-    if not raw_email or not email_pattern.match(raw_email):
-        return JSONResponse(
-            status_code=400, content={"error": "Invalid email format"}
-        )
-
-    try:
-        validated_email = validate_email(raw_email, check_deliverability=False)
-        email = validated_email.email
-        domain = validated_email.domain.lower()
-    except EmailNotValidError as exc:
-        logger.warning("Invalid email format provided: %s", exc)
-        return JSONResponse(
-            status_code=400, content={"error": "Invalid email format"}
-        )
-
-    if domain in blocklist:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "Disposable or fake email not allowed"},
-        )
-
-    try:
-        validate_email(email, check_deliverability=True)
-    except EmailNotValidError as exc:
-        logger.warning("Email domain not reachable: %s", exc)
-        return JSONResponse(
-            status_code=400, content={"error": "Email domain not reachable"}
-        )
-
-    if not password_pattern.match(password):
-        return JSONResponse(
-            status_code=400,
-            content={"error": "Password does not meet security requirements"},
-        )
-
-    if not name:
-        return JSONResponse(status_code=400, content={"error": "Name is required"})
+    verification_code = f"{random.randint(100000, 999999)}"
+    verification_expiry = datetime.utcnow() + timedelta(minutes=10)
 
     try:
         conn = get_connection()
         cur = conn.cursor()
 
-        cur.execute("SELECT 1 FROM users WHERE email=%s", (email,))
+        cur.execute("SELECT 1 FROM users WHERE email=%s", (user.email,))
         if cur.fetchone():
-            return JSONResponse(status_code=400, content={"error": "Email already registered"})
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Email already registered"},
+            )
 
-        hashed_pw = get_password_hash(password)
+        hashed_password = get_password_hash(user.password)
         cur.execute(
-            "INSERT INTO users (email, hashed_password, name) VALUES (%s, %s, %s)",
-            (email, hashed_pw, name),
+            """
+            INSERT INTO users (
+                email,
+                hashed_password,
+                verification_code,
+                verification_expiry,
+                is_verified
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (
+                user.email,
+                hashed_password,
+                verification_code,
+                verification_expiry,
+                False,
+            ),
         )
         conn.commit()
 
-        return {"message": "User registered successfully"}
+        send_verification_email(user.email, verification_code)
+
+        return JSONResponse(
+            status_code=201,
+            content={"message": "User created. Please verify your email."},
+        )
     except Exception as exc:
         logger.exception("Unexpected error during registration: %s", exc)
+        if conn:
+            conn.rollback()
+        return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
+    finally:
+        if cur:
+            cur.close()
+        if conn:
+            conn.close()
+
+
+@router.post("/verify-email")
+def verify_email(payload: VerifyCodeRequest):
+    conn = None
+    cur = None
+
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT verification_code, verification_expiry, is_verified FROM users WHERE email=%s",
+            (payload.email,),
+        )
+        row = cur.fetchone()
+
+        if not row:
+            return JSONResponse(status_code=404, content={"error": "User not found"})
+
+        stored_code, expiry, is_verified = row
+
+        if is_verified:
+            return JSONResponse(
+                status_code=200,
+                content={"message": "Account verified successfully"},
+            )
+
+        if stored_code != payload.code:
+            return JSONResponse(status_code=400, content={"error": "Invalid code"})
+
+        if not expiry:
+            return JSONResponse(status_code=400, content={"error": "Code expired"})
+
+        expiry_naive = expiry
+        if hasattr(expiry_naive, "tzinfo") and expiry_naive.tzinfo is not None:
+            expiry_naive = expiry_naive.astimezone(timezone.utc).replace(tzinfo=None)
+
+        if expiry_naive < datetime.utcnow():
+            return JSONResponse(status_code=400, content={"error": "Code expired"})
+
+        cur.execute(
+            """
+            UPDATE users
+            SET is_verified = TRUE,
+                verification_code = NULL,
+                verification_expiry = NULL
+            WHERE email = %s
+            """,
+            (payload.email,),
+        )
+        conn.commit()
+
+        return JSONResponse(
+            status_code=200,
+            content={"message": "Account verified successfully"},
+        )
+    except Exception as exc:
+        logger.exception("Unexpected error during email verification: %s", exc)
         if conn:
             conn.rollback()
         return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
