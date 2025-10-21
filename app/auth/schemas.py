@@ -7,7 +7,11 @@ class UserLogin(BaseModel):
 class UserRegister(BaseModel):
     email: str
     password: str
-    name: str
+
+
+class VerifyCodeRequest(BaseModel):
+    email: str
+    code: str
 
 class UpdatePasswordRequest(BaseModel):
     current_password: str
