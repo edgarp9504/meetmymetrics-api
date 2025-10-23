@@ -13,9 +13,14 @@ class Settings:
             self.database_url = client.get_secret("POSTGRES-URI").value
             self.google_client_id = client.get_secret("GOOGLE-CLIENT-ID").value
             self.google_client_secret = client.get_secret("GOOGLE-CLIENT-SECRET").value
+            try:
+                self.jwt_secret = client.get_secret("JWT-SECRET-KEY").value
+            except Exception:
+                self.jwt_secret = os.getenv("JWT_SECRET_KEY", "default_jwt_secret")
         else:
             self.database_url = os.getenv("POSTGRES_CONNECTION_STRING")
             self.google_client_id = os.getenv("GOOGLE_CLIENT_ID")
             self.google_client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+            self.jwt_secret = os.getenv("JWT_SECRET_KEY", "default_jwt_secret")
 
 settings = Settings()
