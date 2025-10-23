@@ -7,6 +7,7 @@ from jwt import InvalidTokenError
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
+from starlette.responses import RedirectResponse
 
 from app.auth.schemas import (
     UpdatePasswordRequest,
@@ -341,11 +342,13 @@ async def google_callback(request: Request):
             conn.commit()
 
         access_token = create_access_token({"sub": str(user_id), "email": email})
-
-        return JSONResponse(
-            status_code=200,
-            content={"access_token": access_token, "token_type": "bearer"},
+        redirect_url = (
+            "https://lemon-grass-075d5c610.3.azurestaticapps.net/dashboard?token="
+            f"{access_token}"
         )
+        logger.info("Redirecting authenticated Google user to %s", redirect_url)
+
+        return RedirectResponse(url=redirect_url)
     except (OAuthError, ValueError, KeyError) as exc:
         logger.warning("Google authentication error: %s", exc)
         if conn:
