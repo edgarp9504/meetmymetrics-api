@@ -1,3 +1,4 @@
+import json
 import logging
 import random
 from datetime import datetime, timedelta, timezone
@@ -40,6 +41,31 @@ if GOOGLE_OAUTH_ENABLED:
     )
 else:
     logger.error("Google OAuth credentials are not configured")
+
+
+def _build_post_message_html(payload: dict, message: str) -> str:
+    payload_json = json.dumps(payload)
+    return f"""
+    <!DOCTYPE html>
+    <html lang=\"en\">
+    <head>
+        <meta charset=\"UTF-8\" />
+        <title>Authentication Status</title>
+    </head>
+    <body>
+        <script>
+            (function () {{
+                var payload = {payload_json};
+                if (window.opener && typeof window.opener.postMessage === 'function') {{
+                    window.opener.postMessage(payload, '*');
+                }}
+                window.close();
+            }})();
+        </script>
+        <p>{message}</p>
+    </body>
+    </html>
+    """
 
 
 @router.post("/register")
@@ -343,43 +369,36 @@ async def google_callback(request: Request):
         access_token = create_access_token({"sub": str(user_id), "email": email})
         logger.info("Sending Google authentication token to opener via postMessage")
 
-        html_content = f"""
-        <!DOCTYPE html>
-        <html lang=\"en\">
-        <head>
-            <meta charset=\"UTF-8\" />
-            <title>Authentication Successful</title>
-        </head>
-        <body>
-            <script>
-                (function () {{
-                    var token = {access_token!r};
-                    if (window.opener && typeof window.opener.postMessage === 'function') {{
-                        window.opener.postMessage({{ type: 'google-auth', token: token }}, '*');
-                    }}
-                    window.close();
-                }})();
-            </script>
-            <p>Authentication successful. You can close this window.</p>
-        </body>
-        </html>
-        """
+        user_payload = {"email": email, "name": name}
+        payload = {
+            "type": "GOOGLE_AUTH_SUCCESS",
+            "token": access_token,
+            "user": user_payload,
+        }
+
+        html_content = _build_post_message_html(
+            payload, "Authentication successful. You can close this window."
+        )
 
         return HTMLResponse(content=html_content)
     except (OAuthError, ValueError, KeyError) as exc:
         logger.warning("Google authentication error: %s", exc)
         if conn:
             conn.rollback()
-        return JSONResponse(
-            status_code=400, content={"error": "Google authentication failed"}
+        error_html = _build_post_message_html(
+            {"type": "GOOGLE_AUTH_ERROR", "error": "Google authentication failed"},
+            "Google authentication failed. You can close this window.",
         )
+        return HTMLResponse(status_code=400, content=error_html)
     except Exception as exc:  # pragma: no cover
         logger.exception("Unexpected error during Google callback: %s", exc)
         if conn:
             conn.rollback()
-        return JSONResponse(
-            status_code=400, content={"error": "Google authentication failed"}
+        error_html = _build_post_message_html(
+            {"type": "GOOGLE_AUTH_ERROR", "error": "Google authentication failed"},
+            "Google authentication failed. You can close this window.",
         )
+        return HTMLResponse(status_code=400, content=error_html)
     finally:
         if cur:
             cur.close()
