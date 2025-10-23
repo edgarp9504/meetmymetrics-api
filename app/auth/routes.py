@@ -2,6 +2,7 @@ import json
 import logging
 import random
 from datetime import datetime, timedelta, timezone
+from secrets import token_urlsafe
 
 import jwt
 from jwt import InvalidTokenError
@@ -318,9 +319,14 @@ async def google_login(request: Request):
             status_code=400, content={"error": "Google authentication failed"}
         )
 
+    state_token = token_urlsafe(32)
+    request.session["oauth_state"] = state_token
+
     redirect_uri = "https://meetmymetrics-api.azurewebsites.net/auth/google/callback"
     logger.info("Using Google redirect_uri: %s", redirect_uri)
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+    return await oauth.google.authorize_redirect(
+        request, redirect_uri, state=state_token
+    )
 
 
 @router.get("/google/callback")
@@ -335,6 +341,20 @@ async def google_callback(request: Request):
         )
 
     try:
+        request_state = request.query_params.get("state")
+        session_state = request.session.get("oauth_state")
+
+        if session_state is not None:
+            request.session.pop("oauth_state", None)
+
+        if not request_state or not session_state or request_state != session_state:
+            logger.warning("Invalid OAuth state received during Google callback")
+            error_html = _build_post_message_html(
+                {"type": "GOOGLE_AUTH_ERROR", "error": "Google authentication failed"},
+                "Google authentication failed. You can close this window.",
+            )
+            return HTMLResponse(status_code=400, content=error_html)
+
         token = await oauth.google.authorize_access_token(request)
         user_info = token.get("userinfo")
 
@@ -367,6 +387,32 @@ async def google_callback(request: Request):
             conn.commit()
 
         access_token = create_access_token({"sub": str(user_id), "email": email})
+
+        issued_at = datetime.utcnow()
+        forwarded_for = request.headers.get("x-forwarded-for")
+        if forwarded_for:
+            ip = forwarded_for.split(",")[0].strip()
+        elif request.client:
+            ip = request.client.host
+        else:
+            ip = None
+        user_agent = request.headers.get("user-agent")
+
+        cur.execute(
+            """
+            INSERT INTO user_sessions (
+                user_id,
+                login_provider,
+                issued_at,
+                ip,
+                user_agent
+            )
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (user_id, "google", issued_at, ip, user_agent),
+        )
+        conn.commit()
+
         logger.info("Sending Google authentication token to opener via postMessage")
 
         user_payload = {"email": email, "name": name}
