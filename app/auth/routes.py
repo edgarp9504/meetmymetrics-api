@@ -292,7 +292,8 @@ async def google_login(request: Request):
             status_code=400, content={"error": "Google authentication failed"}
         )
 
-    redirect_uri = request.url_for("google_callback")
+    redirect_uri = "https://meetmymetrics-api.azurewebsites.net/auth/google/callback"
+    logger.info("Using Google redirect_uri: %s", redirect_uri)
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
