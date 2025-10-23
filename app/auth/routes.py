@@ -6,8 +6,7 @@ import jwt
 from jwt import InvalidTokenError
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from fastapi import APIRouter, Header, Request
-from fastapi.responses import JSONResponse
-from starlette.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.auth.schemas import (
     UpdatePasswordRequest,
@@ -342,13 +341,31 @@ async def google_callback(request: Request):
             conn.commit()
 
         access_token = create_access_token({"sub": str(user_id), "email": email})
-        redirect_url = (
-            "https://lemon-grass-075d5c610.3.azurestaticapps.net/dashboard?token="
-            f"{access_token}"
-        )
-        logger.info("Redirecting authenticated Google user to %s", redirect_url)
+        logger.info("Sending Google authentication token to opener via postMessage")
 
-        return RedirectResponse(url=redirect_url)
+        html_content = f"""
+        <!DOCTYPE html>
+        <html lang=\"en\">
+        <head>
+            <meta charset=\"UTF-8\" />
+            <title>Authentication Successful</title>
+        </head>
+        <body>
+            <script>
+                (function () {{
+                    var token = {access_token!r};
+                    if (window.opener && typeof window.opener.postMessage === 'function') {{
+                        window.opener.postMessage({{ type: 'google-auth', token: token }}, '*');
+                    }}
+                    window.close();
+                }})();
+            </script>
+            <p>Authentication successful. You can close this window.</p>
+        </body>
+        </html>
+        """
+
+        return HTMLResponse(content=html_content)
     except (OAuthError, ValueError, KeyError) as exc:
         logger.warning("Google authentication error: %s", exc)
         if conn:
