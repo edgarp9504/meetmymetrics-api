@@ -3,6 +3,8 @@ import logging
 import random
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
+from typing import Optional
+from urllib.parse import urlparse
 
 import jwt
 from jwt import InvalidTokenError
@@ -44,8 +46,9 @@ else:
     logger.error("Google OAuth credentials are not configured")
 
 
-def _build_post_message_html(payload: dict, message: str) -> str:
+def _build_post_message_html(payload: dict, message: str, origin: str) -> str:
     payload_json = json.dumps(payload)
+    origin_json = json.dumps(origin)
     return f"""
     <!DOCTYPE html>
     <html lang=\"en\">
@@ -58,7 +61,7 @@ def _build_post_message_html(payload: dict, message: str) -> str:
             (function () {{
                 var payload = {payload_json};
                 if (window.opener && typeof window.opener.postMessage === 'function') {{
-                    window.opener.postMessage(payload, '*');
+                    window.opener.postMessage(payload, {origin_json});
                 }}
                 window.close();
             }})();
@@ -67,6 +70,19 @@ def _build_post_message_html(payload: dict, message: str) -> str:
     </body>
     </html>
     """
+
+
+def _validate_app_origin(app_origin: Optional[str]) -> str:
+    if not app_origin:
+        raise ValueError("Missing app_origin")
+
+    parsed = urlparse(app_origin)
+
+    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
+        raise ValueError("Invalid app_origin")
+
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    return origin
 
 
 @router.post("/register")
@@ -333,12 +349,30 @@ async def google_login(request: Request):
 async def google_callback(request: Request):
     conn = None
     cur = None
-
     if not GOOGLE_OAUTH_ENABLED:
         logger.error("Attempted Google callback without configured credentials")
         return JSONResponse(
             status_code=400, content={"error": "Google authentication failed"}
         )
+
+    app_origin_param = request.query_params.get("app_origin")
+    try:
+        app_origin = _validate_app_origin(app_origin_param)
+    except ValueError as exc:
+        logger.warning("Invalid app_origin provided: %s", exc)
+        error_html = """
+        <!DOCTYPE html>
+        <html lang=\"en\">
+        <head>
+            <meta charset=\"UTF-8\" />
+            <title>Authentication Error</title>
+        </head>
+        <body>
+            <p>Google authentication failed. You can close this window.</p>
+        </body>
+        </html>
+        """
+        return HTMLResponse(status_code=400, content=error_html)
 
     try:
         request_state = request.query_params.get("state")
@@ -350,8 +384,12 @@ async def google_callback(request: Request):
         if not request_state or not session_state or request_state != session_state:
             logger.warning("Invalid OAuth state received during Google callback")
             error_html = _build_post_message_html(
-                {"type": "GOOGLE_AUTH_ERROR", "error": "Google authentication failed"},
+                {
+                    "type": "GOOGLE_AUTH_ERROR",
+                    "error": "Google authentication failed",
+                },
                 "Google authentication failed. You can close this window.",
+                app_origin,
             )
             return HTMLResponse(status_code=400, content=error_html)
 
@@ -420,10 +458,13 @@ async def google_callback(request: Request):
             "type": "GOOGLE_AUTH_SUCCESS",
             "token": access_token,
             "user": user_payload,
+            "state": request_state,
         }
 
         html_content = _build_post_message_html(
-            payload, "Authentication successful. You can close this window."
+            payload,
+            "Authentication successful. You can close this window.",
+            app_origin,
         )
 
         return HTMLResponse(content=html_content)
@@ -432,8 +473,12 @@ async def google_callback(request: Request):
         if conn:
             conn.rollback()
         error_html = _build_post_message_html(
-            {"type": "GOOGLE_AUTH_ERROR", "error": "Google authentication failed"},
+            {
+                "type": "GOOGLE_AUTH_ERROR",
+                "error": "Google authentication failed",
+            },
             "Google authentication failed. You can close this window.",
+            app_origin,
         )
         return HTMLResponse(status_code=400, content=error_html)
     except Exception as exc:  # pragma: no cover
@@ -441,8 +486,12 @@ async def google_callback(request: Request):
         if conn:
             conn.rollback()
         error_html = _build_post_message_html(
-            {"type": "GOOGLE_AUTH_ERROR", "error": "Google authentication failed"},
+            {
+                "type": "GOOGLE_AUTH_ERROR",
+                "error": "Google authentication failed",
+            },
             "Google authentication failed. You can close this window.",
+            app_origin,
         )
         return HTMLResponse(status_code=400, content=error_html)
     finally:
