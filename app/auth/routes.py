@@ -335,8 +335,14 @@ async def google_login(request: Request):
             status_code=400, content={"error": "Google authentication failed"}
         )
 
+    app_origin_param = request.query_params.get("app_origin")
+    if not app_origin_param:
+        logger.error("Missing app_origin in Google login request")
+        return JSONResponse(status_code=400, content={"error": "Missing app_origin"})
+
     state_token = token_urlsafe(32)
     request.session["oauth_state"] = state_token
+    request.session["app_origin"] = app_origin_param
 
     redirect_uri = "https://meetmymetrics-api.azurewebsites.net/auth/google/callback"
     logger.info("Using Google redirect_uri: %s", redirect_uri)
@@ -355,11 +361,25 @@ async def google_callback(request: Request):
             status_code=400, content={"error": "Google authentication failed"}
         )
 
-    app_origin_param = request.query_params.get("app_origin")
+    app_origin_param = request.session.pop("app_origin", None)
+    if not app_origin_param:
+        logger.error("Missing app_origin in Google callback session")
+        request.session.pop("oauth_state", None)
+        error_html = _build_post_message_html(
+            {
+                "type": "GOOGLE_AUTH_ERROR",
+                "error": "Google authentication failed",
+            },
+            "Google authentication failed. You can close this window.",
+            "*",
+        )
+        return HTMLResponse(status_code=400, content=error_html)
+
     try:
         app_origin = _validate_app_origin(app_origin_param)
     except ValueError as exc:
         logger.warning("Invalid app_origin provided: %s", exc)
+        request.session.pop("oauth_state", None)
         error_html = """
         <!DOCTYPE html>
         <html lang=\"en\">
@@ -376,10 +396,7 @@ async def google_callback(request: Request):
 
     try:
         request_state = request.query_params.get("state")
-        session_state = request.session.get("oauth_state")
-
-        if session_state is not None:
-            request.session.pop("oauth_state", None)
+        session_state = request.session.pop("oauth_state", None)
 
         if not request_state or not session_state or request_state != session_state:
             logger.warning("Invalid OAuth state received during Google callback")
