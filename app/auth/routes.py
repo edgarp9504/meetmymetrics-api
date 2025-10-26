@@ -1,9 +1,10 @@
 import json
 import logging
 import random
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
-from typing import Optional
+from typing import Deque, Dict, Optional
 from urllib.parse import urlparse
 
 import jwt
@@ -22,12 +23,21 @@ from app.core.config import settings
 from app.core.security import create_access_token
 from app.db.connection import get_connection
 from app.utils.hashing import get_password_hash, verify_password
+from app.utils.validation import (
+    is_suspicious_email,
+    validate_email_address,
+    validate_password_strength,
+)
 from app.utils.email import send_verification_email
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
 SECRET_KEY = "super_secret_key"
+
+RATE_LIMIT_WINDOW_SECONDS = 60
+RATE_LIMIT_MAX_ATTEMPTS = 3
+_registration_attempts: Dict[str, Deque[datetime]] = defaultdict(deque)
 
 oauth = OAuth()
 GOOGLE_OAUTH_ENABLED = bool(
@@ -86,19 +96,75 @@ def _validate_app_origin(app_origin: Optional[str]) -> str:
 
 
 @router.post("/register")
-def register(user: UserRegister):
+def register(user: UserRegister, request: Request):
     conn = None
     cur = None
 
     verification_code = f"{random.randint(100000, 999999)}"
     verification_expiry = datetime.utcnow() + timedelta(minutes=10)
 
+    client_ip = "unknown"
+    if request and request.client and request.client.host:
+        client_ip = request.client.host
+
+    now = datetime.utcnow()
+    attempts = _registration_attempts[client_ip]
+    while attempts and (now - attempts[0]).total_seconds() > RATE_LIMIT_WINDOW_SECONDS:
+        attempts.popleft()
+
+    if len(attempts) >= RATE_LIMIT_MAX_ATTEMPTS:
+        logger.warning("Rate limit exceeded for IP %s", client_ip)
+        return JSONResponse(
+            status_code=429,
+            content={"error": "Demasiados intentos de registro. Inténtalo de nuevo más tarde."},
+        )
+
+    attempts.append(now)
+
+    try:
+        normalized_email = validate_email_address(user.email)
+    except ValueError as exc:
+        logger.warning(
+            "Invalid email received during registration from %s: %s",
+            client_ip,
+            exc,
+        )
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid email address."},
+        )
+
+    if is_suspicious_email(normalized_email):
+        logger.warning(
+            "Suspicious email blocked during registration: %s from %s",
+            normalized_email,
+            client_ip,
+        )
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Correo sospechoso o automatizado detectado."},
+        )
+
+    if not validate_password_strength(user.password):
+        logger.warning("Weak password rejected for email %s from %s", normalized_email, client_ip)
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": "La contraseña debe tener al menos 8 caracteres, incluyendo mayúsculas, minúsculas, número y símbolo especial.",
+            },
+        )
+
     try:
         conn = get_connection()
         cur = conn.cursor()
 
-        cur.execute("SELECT 1 FROM users WHERE email=%s", (user.email,))
+        cur.execute("SELECT 1 FROM users WHERE email=%s", (normalized_email,))
         if cur.fetchone():
+            logger.warning(
+                "Attempt to register an already registered email: %s from %s",
+                normalized_email,
+                client_ip,
+            )
             return JSONResponse(
                 status_code=400,
                 content={"error": "Email already registered"},
@@ -117,7 +183,7 @@ def register(user: UserRegister):
             VALUES (%s, %s, %s, %s, %s)
             """,
             (
-                user.email,
+                normalized_email,
                 hashed_password,
                 verification_code,
                 verification_expiry,
@@ -126,7 +192,7 @@ def register(user: UserRegister):
         )
         conn.commit()
 
-        send_verification_email(user.email, verification_code)
+        send_verification_email(normalized_email, verification_code)
 
         return JSONResponse(
             status_code=201,
