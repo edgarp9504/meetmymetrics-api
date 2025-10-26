@@ -154,6 +154,22 @@ def register(user: UserRegister, request: Request):
             },
         )
 
+    first_name = user.first_name
+    last_name = user.last_name
+    account_type = user.account_type
+    company_name = user.company_name
+
+    if account_type == "agencia" and not company_name:
+        logger.warning(
+            "Missing company_name for agency account during registration: %s from %s",
+            normalized_email,
+            client_ip,
+        )
+        return JSONResponse(
+            status_code=400,
+            content={"error": "El nombre de la empresa es obligatorio para cuentas tipo agencia."},
+        )
+
     try:
         conn = get_connection()
         cur = conn.cursor()
@@ -174,17 +190,25 @@ def register(user: UserRegister, request: Request):
         cur.execute(
             """
             INSERT INTO users (
+                first_name,
+                last_name,
                 email,
                 hashed_password,
+                account_type,
+                company_name,
                 verification_code,
                 verification_expiry,
                 is_verified
             )
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
+                first_name,
+                last_name,
                 normalized_email,
                 hashed_password,
+                account_type,
+                company_name,
                 verification_code,
                 verification_expiry,
                 False,
