@@ -1,7 +1,7 @@
 import re
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, root_validator, validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 class UserLogin(BaseModel):
     email: str
@@ -15,7 +15,7 @@ class UserRegister(BaseModel):
     account_type: Literal["personal", "agencia"]
     company_name: Optional[str] = None
 
-    @validator("first_name", "last_name")
+    @field_validator("first_name", "last_name")
     def validate_name(cls, value: str) -> str:
         cleaned = value.strip()
         if not cleaned:
@@ -29,7 +29,7 @@ class UserRegister(BaseModel):
 
         return cleaned
 
-    @validator("company_name")
+    @field_validator("company_name")
     def validate_company_name(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return value
@@ -43,24 +43,21 @@ class UserRegister(BaseModel):
 
         return cleaned
 
-    @validator("account_type", pre=True)
+    @field_validator("account_type", mode="before")
     def normalize_account_type(cls, value: str) -> str:
         if isinstance(value, str):
             value = value.strip().lower()
         return value
 
-    @root_validator
-    def ensure_company_for_agency(cls, values: dict) -> dict:
-        account_type = values.get("account_type")
-        company_name = values.get("company_name")
-
-        if account_type == "agencia" and not company_name:
+    @model_validator(mode="after")
+    def ensure_company_for_agency(cls, model: "UserRegister") -> "UserRegister":
+        if model.account_type == "agencia" and not model.company_name:
             raise ValueError("company_name es obligatorio para cuentas de tipo 'agencia'.")
 
-        if account_type == "personal":
-            values["company_name"] = None
+        if model.account_type == "personal":
+            model.company_name = None
 
-        return values
+        return model
 
 
 class VerifyCodeRequest(BaseModel):
