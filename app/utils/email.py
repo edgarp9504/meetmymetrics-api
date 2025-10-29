@@ -1,55 +1,90 @@
+from importlib import import_module, util
 import logging
 import os
-import smtplib
-from email.message import EmailMessage
+from typing import Any, Optional, Type
 
 
 logger = logging.getLogger(__name__)
 
 
-def send_verification_email(email: str, code: str) -> None:
-    """Send the verification code to the user via email.
+def _load_email_client() -> Optional[Type[Any]]:
+    """Return the Azure EmailClient class if the SDK is available."""
 
-    Tries to use Azure Communication Service Email if the
-    ``AZURE_COMM_CONNECTION_STRING`` environment variable is configured.
-    Otherwise falls back to using a local SMTP relay. Errors are logged but
-    not raised to avoid interrupting the registration flow.
+    if util.find_spec("azure.communication.email") is None:
+        return None
+
+    email_module = import_module("azure.communication.email")
+    return getattr(email_module, "EmailClient", None)
+
+
+def send_verification_email(to_email: str, user_name: str, code: str) -> None:
+    """Send a verification code email through Azure Communication Services."""
+
+    endpoint = os.getenv("AZURE_COMMUNICATION_ENDPOINT")
+    access_key = os.getenv("AZURE_COMMUNICATION_KEY")
+    sender = os.getenv("SENDER_EMAIL")
+
+    if not endpoint or not access_key:
+        logger.error(
+            "Azure Communication Services credentials are not configured; "
+            "skipping verification email for %s",
+            to_email,
+        )
+        return
+
+    if not sender:
+        logger.error("SENDER_EMAIL environment variable is not configured.")
+        return
+
+    email_client_cls = _load_email_client()
+
+    if email_client_cls is None:
+        logger.error(
+            "azure-communication-email package is not installed; cannot send email to %s",
+            to_email,
+        )
+        return
+
+    client = email_client_cls(endpoint, access_key)
+
+    recipient_name = user_name.strip() if user_name else to_email
+
+    subject = "Verifica tu cuenta en MeetMyMetrics"
+    html_body = f"""
+    <html>
+        <body style="font-family:Arial,sans-serif;">
+            <h2>¡Hola {recipient_name}!</h2>
+            <p>Gracias por registrarte en <strong>MeetMyMetrics</strong>.</p>
+            <p>Tu código de verificación es:</p>
+            <h1 style="color:#0A2540;">{code}</h1>
+            <p>Este código expira en 15 minutos.</p>
+            <br>
+            <p>Si no creaste una cuenta, puedes ignorar este mensaje.</p>
+        </body>
+    </html>
     """
 
-    subject = "Verifica tu cuenta"
-    body = f"Tu código de verificación es: {code}"
-    sender = os.getenv("SENDER_EMAIL", "no-reply@meetmymetrics.com")
-    connection_string = os.getenv("AZURE_COMM_CONNECTION_STRING")
-
-    if connection_string:
-        try:
-            from azure.communication.email import EmailClient  # type: ignore
-
-            email_client = EmailClient.from_connection_string(connection_string)
-            poller = email_client.begin_send(
-                {
-                    "senderAddress": sender,
-                    "recipients": {"to": [{"address": email}]},
-                    "content": {"subject": subject, "plainText": body},
-                }
-            )
-            poller.result()
-            return
-        except Exception as exc:  # pragma: no cover - best effort logging
-            logger.exception(
-                "Failed to send verification email via Azure Communication Service: %s",
-                exc,
-            )
+    message = {
+        "senderAddress": sender,
+        "recipients": {"to": [{"address": to_email}]},
+        "content": {"subject": subject, "html": html_body},
+    }
 
     try:
-        message = EmailMessage()
-        message["Subject"] = subject
-        message["From"] = sender
-        message["To"] = email
-        message.set_content(body)
-
-        with smtplib.SMTP("localhost") as smtp:
-            smtp.send_message(message)
+        poller = client.begin_send(message)
+        result: Optional[dict] = poller.result()
+        message_id = None
+        if isinstance(result, dict):
+            message_id = result.get("id")
+        logger.info(
+            "Verification email sent to %s%s",
+            to_email,
+            f" (ID: {message_id})" if message_id else "",
+        )
     except Exception as exc:  # pragma: no cover - best effort logging
-        logger.exception("Failed to send verification email via SMTP: %s", exc)
+        logger.exception(
+            "Failed to send verification email to %s via Azure Communication Services: %s",
+            to_email,
+            exc,
+        )
 
