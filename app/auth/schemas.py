@@ -49,15 +49,18 @@ class UserRegister(BaseModel):
             value = value.strip().lower()
         return value
 
-    @model_validator(mode="after")
-    def ensure_company_for_agency(cls, model: "UserRegister") -> "UserRegister":
-        if model.account_type == "agencia" and not model.company_name:
+    @model_validator(mode="before")
+    def ensure_company_for_agency(cls, data: dict) -> dict:
+        account_type = data.get("account_type")
+        company_name = data.get("company_name")
+
+        if account_type == "agencia" and not company_name:
             raise ValueError("company_name es obligatorio para cuentas de tipo 'agencia'.")
 
-        if model.account_type == "personal":
-            model.company_name = None
+        if account_type == "personal":
+            data["company_name"] = None
 
-        return model
+        return data
 
 
 class VerifyCodeRequest(BaseModel):
