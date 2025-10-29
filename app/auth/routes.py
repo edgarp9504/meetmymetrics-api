@@ -120,7 +120,7 @@ def register(user: UserRegister, request: Request):
     cur = None
 
     verification_code = f"{random.randint(100000, 999999)}"
-    verification_expiry = datetime.utcnow() + timedelta(minutes=10)
+    verification_expiry = datetime.utcnow() + timedelta(minutes=15)
 
     client_ip = "unknown"
     if request and request.client and request.client.host:
@@ -239,7 +239,10 @@ def register(user: UserRegister, request: Request):
 
         return JSONResponse(
             status_code=201,
-            content={"message": "User created. Please verify your email."},
+            content={
+                "message": "Cuenta creada. Revisa tu correo para verificarla.",
+                "requires_verification": True,
+            },
         )
     except Exception as exc:
         logger.exception("Unexpected error during registration: %s", exc)
@@ -255,6 +258,7 @@ def register(user: UserRegister, request: Request):
 
 @router.post("/verify")
 @router.post("/verify-email")
+@router.post("/verify_email")
 def verify_email(payload: VerifyCodeRequest):
     conn = None
     cur = None
