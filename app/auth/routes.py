@@ -36,6 +36,9 @@ def resend_verification_code(conn, email: str) -> str:
     expiry = datetime.utcnow() + timedelta(minutes=15)
 
     with conn.cursor() as cur:
+        cur.execute("SELECT first_name FROM users WHERE email = %s", (email,))
+        row = cur.fetchone()
+        first_name = row[0] if row and row[0] else ""
         cur.execute(
             """
             UPDATE users
@@ -46,7 +49,7 @@ def resend_verification_code(conn, email: str) -> str:
         )
 
     conn.commit()
-    send_verification_email(email, code)
+    send_verification_email(email, first_name, code)
     return code
 
 router = APIRouter()
@@ -235,7 +238,7 @@ def register(user: UserRegister, request: Request):
         )
         conn.commit()
 
-        send_verification_email(normalized_email, verification_code)
+        send_verification_email(normalized_email, first_name, verification_code)
 
         return JSONResponse(
             status_code=201,
