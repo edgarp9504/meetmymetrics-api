@@ -23,6 +23,7 @@ def send_verification_email(to_email: str, user_name: str, code: str) -> None:
     endpoint = os.getenv("AZURE_COMMUNICATION_ENDPOINT")
     access_key = os.getenv("AZURE_COMMUNICATION_KEY")
     sender = os.getenv("SENDER_EMAIL")
+    environment = os.getenv("ENVIRONMENT", "undefined")
 
     if not endpoint or not access_key:
         logger.error(
@@ -35,6 +36,16 @@ def send_verification_email(to_email: str, user_name: str, code: str) -> None:
     if not sender:
         logger.error("SENDER_EMAIL environment variable is not configured.")
         return
+
+    print("\n===== Azure Communication Service Configuration =====")
+    print(f"ENVIRONMENT: {environment}")
+    print(f"ENDPOINT: {endpoint}")
+    print(f"SENDER_EMAIL: {sender}")
+    if access_key:
+        print(f"ACCESS_KEY: {access_key[:10]}********")
+    else:
+        print("ACCESS_KEY: ❌ Not found")
+    print("=====================================================\n")
 
     email_client_cls = _load_email_client()
 
