@@ -30,6 +30,25 @@ from app.utils.validation import (
 )
 from app.utils.email import send_verification_email
 
+
+def resend_verification_code(conn, email: str) -> str:
+    code = f"{random.randint(100000, 999999)}"
+    expiry = datetime.utcnow() + timedelta(minutes=15)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE users
+            SET verification_code = %s, verification_expiry = %s
+            WHERE email = %s
+            """,
+            (code, expiry, email),
+        )
+
+    conn.commit()
+    send_verification_email(email, code)
+    return code
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
@@ -234,6 +253,7 @@ def register(user: UserRegister, request: Request):
             conn.close()
 
 
+@router.post("/verify")
 @router.post("/verify-email")
 def verify_email(payload: VerifyCodeRequest):
     conn = None
@@ -310,7 +330,7 @@ def login(user: UserLogin):
         conn = get_connection()
         cur = conn.cursor()
         cur.execute(
-            "SELECT id, email, hashed_password FROM users WHERE email=%s",
+            "SELECT id, email, hashed_password, is_verified FROM users WHERE email=%s",
             (user.email,),
         )
         row = cur.fetchone()
@@ -322,13 +342,28 @@ def login(user: UserLogin):
                 content={"message": "Invalid credentials"},
             )
 
-        user_id, email, hashed_password = row
+        user_id, email, hashed_password, is_verified = row
 
         if not verify_password(user.password, hashed_password):
             return JSONResponse(
                 status_code=400,
                 media_type="application/json",
                 content={"message": "Invalid credentials"},
+            )
+
+        if not is_verified:
+            resend_verification_code(conn, email)
+            return JSONResponse(
+                status_code=403,
+                media_type="application/json",
+                content={
+                    "status": "unverified",
+                    "message": (
+                        "Tu cuenta no está verificada. Se ha enviado un nuevo código de "
+                        "verificación a tu correo."
+                    ),
+                    "email": email,
+                },
             )
 
         expiration = datetime.now(timezone.utc) + timedelta(hours=8)
@@ -608,36 +643,3 @@ async def google_callback(request: Request):
             conn.close()
 
 
-@router.post("/login")
-def login(user: UserLogin):
-    conn = None
-    cur = None
-
-    try:
-        conn = get_connection()
-        cur = conn.cursor()
-
-        cur.execute(
-            "SELECT hashed_password FROM users WHERE email=%s",
-            (user.email,),
-        )
-        db_user = cur.fetchone()
-
-        if not db_user:
-            return JSONResponse(
-                status_code=400, content={"error": "Invalid credentials"}
-            )
-
-        if not verify_password(user.password, db_user[0]):
-            return JSONResponse(
-                status_code=400, content={"error": "Invalid credentials"}
-            )
-
-        return JSONResponse(status_code=200, content={"message": "Login successful"})
-    except Exception:
-        return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
-    finally:
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
