@@ -1,101 +1,84 @@
-from importlib import import_module, util
-import logging
+"""Utility helpers for sending transactional emails via Resend."""
+
+from __future__ import annotations
+
 import os
-from typing import Any, Optional, Type
+
+import requests
 
 
-logger = logging.getLogger(__name__)
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
+SENDER_EMAIL = os.getenv("SENDER_EMAIL", "no-reply@resend.dev")
+RESEND_URL = "https://api.resend.com/emails"
 
 
-def _load_email_client() -> Optional[Type[Any]]:
-    """Return the Azure EmailClient class if the SDK is available."""
+def _build_verification_html(user_name: str, verification_code: str) -> str:
+    recipient_name = user_name.strip() if user_name else ""
 
-    if util.find_spec("azure.communication.email") is None:
-        return None
+    greeting = f"Hola {recipient_name} 👋" if recipient_name else "Hola 👋"
 
-    email_module = import_module("azure.communication.email")
-    return getattr(email_module, "EmailClient", None)
-
-
-def send_verification_email(to_email: str, user_name: str, code: str) -> None:
-    """Send a verification code email through Azure Communication Services."""
-
-    endpoint = os.getenv("AZURE_COMMUNICATION_ENDPOINT")
-    access_key = os.getenv("AZURE_COMMUNICATION_KEY")
-    sender = os.getenv("SENDER_EMAIL")
-    environment = os.getenv("ENVIRONMENT", "undefined")
-
-    if not endpoint or not access_key:
-        logger.error(
-            "Azure Communication Services credentials are not configured; "
-            "skipping verification email for %s",
-            to_email,
-        )
-        return
-
-    if not sender:
-        logger.error("SENDER_EMAIL environment variable is not configured.")
-        return
-
-    print("\n===== Azure Communication Service Configuration =====")
-    print(f"ENVIRONMENT: {environment}")
-    print(f"ENDPOINT: {endpoint}")
-    print(f"SENDER_EMAIL: {sender}")
-    if access_key:
-        print(f"ACCESS_KEY: {access_key[:10]}********")
-    else:
-        print("ACCESS_KEY: ❌ Not found")
-    print("=====================================================\n")
-
-    email_client_cls = _load_email_client()
-
-    if email_client_cls is None:
-        logger.error(
-            "azure-communication-email package is not installed; cannot send email to %s",
-            to_email,
-        )
-        return
-
-    client = email_client_cls(endpoint, access_key)
-
-    recipient_name = user_name.strip() if user_name else to_email
-
-    subject = "Verifica tu cuenta en MeetMyMetrics"
-    html_body = f"""
+    return f"""
     <html>
-        <body style="font-family:Arial,sans-serif;">
-            <h2>¡Hola {recipient_name}!</h2>
-            <p>Gracias por registrarte en <strong>MeetMyMetrics</strong>.</p>
-            <p>Tu código de verificación es:</p>
-            <h1 style="color:#0A2540;">{code}</h1>
+        <body style="font-family: Arial, sans-serif;">
+            <h2>{greeting}</h2>
+            <p>Tu código de verificación para <b>MeetMyMetrics</b> es:</p>
+            <div style="font-size: 22px; font-weight: bold; color: #0078D4; margin: 10px 0;">
+                {verification_code}
+            </div>
             <p>Este código expira en 15 minutos.</p>
-            <br>
-            <p>Si no creaste una cuenta, puedes ignorar este mensaje.</p>
+            <br/>
+            <p>Si no solicitaste este registro, ignora este mensaje.</p>
         </body>
     </html>
     """
 
-    message = {
-        "senderAddress": sender,
-        "recipients": {"to": [{"address": to_email}]},
-        "content": {"subject": subject, "html": html_body},
+
+def _log_missing_env(var_name: str) -> None:
+    print(f"❌ Variable de entorno no configurada: {var_name}")
+
+
+def send_verification_email(to_email: str, user_name: str, verification_code: str) -> None:
+    """Send a verification email using the Resend transactional email service."""
+
+    if not RESEND_API_KEY:
+        _log_missing_env("RESEND_API_KEY")
+        return
+
+    if not SENDER_EMAIL:
+        _log_missing_env("SENDER_EMAIL")
+        return
+
+    if not to_email:
+        print("❌ Dirección de correo destino no proporcionada.")
+        return
+
+    html_content = _build_verification_html(user_name, verification_code)
+
+    payload = {
+        "from": f"MeetMyMetrics <{SENDER_EMAIL}>",
+        "to": [to_email],
+        "subject": "Verifica tu cuenta en MeetMyMetrics",
+        "html": html_content,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "Content-Type": "application/json",
     }
 
     try:
-        poller = client.begin_send(message)
-        result: Optional[dict] = poller.result()
-        message_id = None
-        if isinstance(result, dict):
-            message_id = result.get("id")
-        logger.info(
-            "Verification email sent to %s%s",
-            to_email,
-            f" (ID: {message_id})" if message_id else "",
-        )
-    except Exception as exc:  # pragma: no cover - best effort logging
-        logger.exception(
-            "Failed to send verification email to %s via Azure Communication Services: %s",
-            to_email,
-            exc,
+        response = requests.post(RESEND_URL, json=payload, headers=headers, timeout=10)
+    except requests.RequestException as exc:
+        print(f"❌ Excepción al enviar correo con Resend: {exc}")
+        return
+
+    if response.ok:
+        print(f"✅ Correo de verificación enviado a {to_email}")
+    else:
+        print(
+            "❌ Error al enviar correo "
+            f"({response.status_code}): {response.text or response.reason}"
         )
 
+
+__all__ = ["send_verification_email"]
