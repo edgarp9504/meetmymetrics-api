@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import get_db
 from dependencies import get_current_user
-from models import AdAccount
+from models import AdAccount, UserAdAccount
 from schemas import AdAccountCreate, AdAccountOut
 
 router = APIRouter(prefix="/ad_accounts", tags=["Ad Accounts"])
@@ -14,7 +15,12 @@ router = APIRouter(prefix="/ad_accounts", tags=["Ad Accounts"])
 
 @router.get("/", response_model=list[AdAccountOut])
 def get_ad_accounts(user=Depends(get_current_user), db: Session = Depends(get_db)):
-    return db.query(AdAccount).filter(AdAccount.user_id == user.id).all()
+    return (
+        db.query(AdAccount)
+        .join(UserAdAccount, UserAdAccount.ad_account_id == AdAccount.id)
+        .filter(UserAdAccount.user_id == user.id)
+        .all()
+    )
 
 
 @router.post("/", response_model=AdAccountOut, status_code=status.HTTP_201_CREATED)
@@ -23,8 +29,43 @@ def create_ad_account(
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    ad_account = AdAccount(**data.model_dump(), user_id=user.id)
-    db.add(ad_account)
+    existing = (
+        db.query(AdAccount)
+        .filter(
+            and_(
+                AdAccount.social_network == data.social_network,
+                AdAccount.account_identifier == data.account_identifier,
+            )
+        )
+        .one_or_none()
+    )
+
+    if existing:
+        for field, value in data.model_dump().items():
+            setattr(existing, field, value)
+        ad_account = existing
+    else:
+        ad_account = AdAccount(**data.model_dump())
+        db.add(ad_account)
+        db.flush()
+
+    association = (
+        db.query(UserAdAccount)
+        .filter(
+            UserAdAccount.user_id == user.id,
+            UserAdAccount.ad_account_id == ad_account.id,
+        )
+        .one_or_none()
+    )
+
+    if not association:
+        if count_user_accounts(user.id, db) >= user.account_limit:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Solo puedes conectar una cuenta en el plan gratuito.",
+            )
+        db.add(UserAdAccount(user_id=user.id, ad_account_id=ad_account.id))
+
     try:
         db.commit()
     except IntegrityError:
@@ -35,3 +76,12 @@ def create_ad_account(
         )
     db.refresh(ad_account)
     return ad_account
+
+
+def count_user_accounts(user_id: int, db: Session) -> int:
+    return (
+        db.query(func.count(UserAdAccount.id))
+        .filter(UserAdAccount.user_id == user_id)
+        .scalar()
+        or 0
+    )

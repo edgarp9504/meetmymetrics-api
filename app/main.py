@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth.routes import router as auth_router
-from routers import ad_accounts
+from routers import ad_accounts, oauth
 
 app = FastAPI(title="MeetMyMetrics API")
 
@@ -30,4 +30,5 @@ session_secret_key = os.getenv("SESSION_SECRET_KEY", "dev_session_secret_key")
 app.add_middleware(SessionMiddleware, secret_key=session_secret_key)
 
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
+app.include_router(oauth.router)
 app.include_router(ad_accounts.router)
