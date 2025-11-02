@@ -32,7 +32,10 @@ def get_current_user(authorization: Optional[str] = Header(default=None)):
     try:
         conn = get_connection()
         with conn.cursor() as cur:
-            cur.execute("SELECT id, email FROM users WHERE id=%s", (user_id,))
+            cur.execute(
+                "SELECT id, email, account_type FROM users WHERE id=%s",
+                (user_id,),
+            )
             row = cur.fetchone()
             if not row:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -44,4 +47,22 @@ def get_current_user(authorization: Optional[str] = Header(default=None)):
         if conn:
             conn.close()
 
-    return SimpleNamespace(id=row[0], email=row[1])
+    account_type = row[2] if len(row) > 2 else None
+    account_limit = _resolve_account_limit(account_type)
+
+    return SimpleNamespace(
+        id=row[0],
+        email=row[1],
+        account_type=account_type,
+        account_limit=account_limit,
+    )
+
+
+def _resolve_account_limit(account_type: Optional[str]) -> int:
+    if not account_type:
+        return 1
+
+    normalized = account_type.lower()
+    if normalized in {"free", "personal"}:
+        return 1
+    return 10
