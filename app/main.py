@@ -31,4 +31,5 @@ app.add_middleware(SessionMiddleware, secret_key=session_secret_key)
 
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
 app.include_router(oauth.router)
+app.include_router(oauth.debug_router)
 app.include_router(ad_accounts.router)

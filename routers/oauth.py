@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 from typing import Any, Dict, List, Optional
@@ -29,6 +30,25 @@ from schemas import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["OAuth2 Providers"])
+debug_router = APIRouter()
+
+
+@debug_router.get("/debug/env", tags=["Debug"], include_in_schema=False)
+def debug_env_vars() -> Dict[str, Optional[str]]:
+    """Endpoint temporal para depurar las variables de entorno OAuth de Meta.
+
+    ⚠️ IMPORTANTE: eliminar este endpoint antes de pasar a producción.
+    """
+
+    meta_client_id = os.getenv("META_CLIENT_ID")
+    meta_client_secret = os.getenv("META_CLIENT_SECRET")
+    meta_redirect_uri = os.getenv("META_REDIRECT_URI")
+
+    return {
+        "META_CLIENT_ID": meta_client_id,
+        "META_CLIENT_SECRET": meta_client_secret,
+        "META_REDIRECT_URI": meta_redirect_uri,
+    }
 
 STATE_SESSION_KEY = "oauth_states"
 SUPPORTED_PROVIDERS = {"meta", "google", "tiktok", "linkedin"}
