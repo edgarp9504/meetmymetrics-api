@@ -5,6 +5,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 from typing import Any, Dict, List, Optional
+import urllib.parse
 from urllib.parse import urlencode
 
 import httpx
@@ -52,6 +53,57 @@ def debug_env_vars() -> Dict[str, Optional[str]]:
 
 STATE_SESSION_KEY = "oauth_states"
 SUPPORTED_PROVIDERS = {"meta", "google", "tiktok", "linkedin"}
+
+
+# Instrumented Meta OAuth login endpoint for detailed debugging
+@router.get("/meta/login")
+def meta_login(request: Request, origin: str | None = None):
+    """
+    Endpoint para iniciar el flujo OAuth2 con Meta (Facebook/Instagram)
+    con logging detallado para diagnóstico.
+    """
+
+    try:
+        meta_client_id = os.getenv("META_CLIENT_ID")
+        meta_client_secret = os.getenv("META_CLIENT_SECRET")
+        meta_redirect_uri = os.getenv("META_REDIRECT_URI")
+
+        logging.info("🔹 [OAuth Meta] Iniciando flujo de autenticación...")
+        logging.info(
+            "📦 Variables cargadas -> CLIENT_ID: %s, REDIRECT_URI: %s",
+            meta_client_id,
+            meta_redirect_uri,
+        )
+
+        if not meta_client_id or not meta_client_secret or not meta_redirect_uri:
+            logging.error("🚨 [OAuth Meta] Variables de entorno faltantes")
+            raise HTTPException(
+                status_code=503,
+                detail="Credenciales OAuth no configuradas para meta",
+            )
+
+        state = "secure_state_1234"
+        encoded_redirect_uri = urllib.parse.quote(meta_redirect_uri, safe="")
+        auth_url = (
+            "https://www.facebook.com/v20.0/dialog/oauth?"
+            f"client_id={meta_client_id}"
+            f"&redirect_uri={encoded_redirect_uri}"
+            f"&scope=ads_read,business_management,read_insights"
+            f"&state={state}"
+        )
+
+        logging.info("🔗 [OAuth Meta] URL generada: %s", auth_url)
+        if origin:
+            logging.info("🌍 [Frontend Origin] %s", origin)
+
+        return {"auth_url": auth_url, "state": state}
+
+    except Exception as exc:  # pylint: disable=broad-except
+        logging.exception("❌ [OAuth Meta] Error inesperado: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error interno OAuth Meta: {exc}",
+        ) from exc
 
 
 @router.get("/{provider}/login", response_class=RedirectResponse)
