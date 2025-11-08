@@ -17,82 +17,69 @@ def _cursor(conn: PGConnection):
 
 
 def ensure_account_schema(conn: PGConnection) -> None:
-    """Create the multi-account tables if they do not exist."""
+    """Ensure the schema for account and invitation management exists."""
 
     with _cursor(conn) as cur:
+        # Tabla: accounts
         cur.execute(
             """
-            CREATE TYPE IF NOT EXISTS plan_type AS ENUM ('free', 'pro', 'business')
-            """
-        )
-
-        cur.execute(
-            """
-            CREATE TYPE IF NOT EXISTS invitation_status AS ENUM (
-                'pending',
-                'accepted',
-                'expired',
-                'revoked'
-            )
-            """
-        )
-
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS accounts (
+            CREATE TABLE IF NOT EXISTS public.accounts (
                 id SERIAL PRIMARY KEY,
-                owner_user_id INTEGER NOT NULL UNIQUE
-                    REFERENCES users(id) ON DELETE CASCADE,
-                plan_type plan_type NOT NULL DEFAULT 'free',
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
+                owner_user_id INTEGER NOT NULL UNIQUE REFERENCES public.users(id) ON DELETE CASCADE,
+                name VARCHAR(150) NOT NULL,
+                plan_type VARCHAR(20) NOT NULL DEFAULT 'free' CHECK (plan_type IN ('free','pro','business')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
 
+        # Tabla: account_members
         cur.execute(
             """
-            CREATE TABLE IF NOT EXISTS account_members (
+            CREATE TABLE IF NOT EXISTS public.account_members (
                 id SERIAL PRIMARY KEY,
-                account_id INTEGER NOT NULL
-                    REFERENCES accounts(id) ON DELETE CASCADE,
-                user_id INTEGER NOT NULL
-                    REFERENCES users(id) ON DELETE CASCADE,
-                role VARCHAR(32) NOT NULL,
-                invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                UNIQUE(account_id, user_id)
-            )
+                account_id INTEGER NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+                role VARCHAR(20) NOT NULL DEFAULT 'member' CHECK (role IN ('owner','admin','member')),
+                invited_by_user_id INTEGER REFERENCES public.users(id) ON DELETE SET NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (account_id, user_id)
+            );
             """
         )
 
+        # Tabla: account_invitations
         cur.execute(
             """
-            CREATE TABLE IF NOT EXISTS account_invitations (
+            CREATE TABLE IF NOT EXISTS public.account_invitations (
                 id SERIAL PRIMARY KEY,
-                account_id INTEGER NOT NULL
-                    REFERENCES accounts(id) ON DELETE CASCADE,
-                email TEXT NOT NULL,
-                token TEXT NOT NULL UNIQUE,
-                status invitation_status NOT NULL DEFAULT 'pending',
-                expires_at TIMESTAMPTZ NOT NULL,
-                invited_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                accepted_at TIMESTAMPTZ,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
+                account_id INTEGER NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
+                invited_email VARCHAR(100) NOT NULL,
+                invited_first_name VARCHAR(50),
+                invited_last_name VARCHAR(50),
+                invited_by_user_id INTEGER NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+                token VARCHAR(128) NOT NULL UNIQUE,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','revoked','expired')),
+                expires_at TIMESTAMP NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (account_id, invited_email)
+            );
+            """
+        )
+
+        # Índices adicionales
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_account_members_account
+            ON public.account_members (account_id);
             """
         )
 
         cur.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_account_invitations_account_email
-            ON account_invitations (account_id, lower(email))
-            """
-        )
-
-        cur.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_account_members_account
-            ON account_members (account_id)
+            ON public.account_invitations (account_id, lower(invited_email));
             """
         )
 
