@@ -22,6 +22,7 @@ from app.auth.schemas import (
 from app.core.config import settings
 from app.core.security import create_access_token
 from app.db.connection import get_connection
+from app.db.migrations import ensure_account_schema
 from app.utils.hashing import get_password_hash, verify_password
 from app.utils.validation import (
     is_suspicious_email,
@@ -194,6 +195,7 @@ def register(user: UserRegister, request: Request):
 
     try:
         conn = get_connection()
+        ensure_account_schema(conn)
         cur = conn.cursor()
 
         cur.execute("SELECT 1 FROM users WHERE email=%s", (normalized_email,))
@@ -223,6 +225,7 @@ def register(user: UserRegister, request: Request):
                 is_verified
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
             """,
             (
                 first_name,
@@ -236,6 +239,93 @@ def register(user: UserRegister, request: Request):
                 False,
             ),
         )
+        user_id = cur.fetchone()[0]
+
+        invitation_row = None
+        linked_via_invitation = False
+        cur.execute(
+            """
+            SELECT id, account_id, invited_by, expires_at, status
+            FROM account_invitations
+            WHERE lower(email) = lower(%s)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (normalized_email,),
+        )
+        invitation_row = cur.fetchone()
+
+        now_utc = datetime.utcnow()
+        if invitation_row:
+            (
+                invitation_id,
+                invitation_account_id,
+                invitation_invited_by,
+                invitation_expires,
+                invitation_status,
+            ) = invitation_row
+
+            if invitation_expires and getattr(invitation_expires, "tzinfo", None) is not None:
+                invitation_expires = (
+                    invitation_expires.astimezone(timezone.utc).replace(tzinfo=None)
+                )
+
+            if (
+                invitation_status == "pending"
+                and invitation_expires
+                and invitation_expires >= now_utc
+            ):
+                cur.execute(
+                    """
+                    INSERT INTO account_members (account_id, user_id, role, invited_by)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (account_id, user_id)
+                    DO UPDATE SET invited_by = EXCLUDED.invited_by
+                    """,
+                    (
+                        invitation_account_id,
+                        user_id,
+                        "member",
+                        invitation_invited_by,
+                    ),
+                )
+                cur.execute(
+                    """
+                    UPDATE account_invitations
+                    SET status = 'accepted',
+                        accepted_at = %s
+                    WHERE id = %s
+                    """,
+                    (now_utc, invitation_id),
+                )
+                linked_via_invitation = True
+            elif invitation_status == "pending":
+                cur.execute(
+                    "UPDATE account_invitations SET status = 'expired' WHERE id = %s",
+                    (invitation_id,),
+                )
+            else:
+                linked_via_invitation = False
+
+        if not linked_via_invitation:
+            cur.execute(
+                """
+                INSERT INTO accounts (owner_user_id, plan_type)
+                VALUES (%s, %s)
+                RETURNING id
+                """,
+                (user_id, "free"),
+            )
+            account_id = cur.fetchone()[0]
+            cur.execute(
+                """
+                INSERT INTO account_members (account_id, user_id, role)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (account_id, user_id) DO NOTHING
+                """,
+                (account_id, user_id, "owner"),
+            )
+
         conn.commit()
 
         send_verification_email(normalized_email, first_name, verification_code)
@@ -373,8 +463,33 @@ def login(user: UserLogin):
                 },
             )
 
+        cur.execute(
+            """
+            SELECT am.account_id, am.role, a.plan_type
+            FROM account_members am
+            JOIN accounts a ON a.id = am.account_id
+            WHERE am.user_id = %s
+            ORDER BY CASE WHEN am.role = 'owner' THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (user_id,),
+        )
+        membership_row = cur.fetchone()
+        account_id = None
+        account_role = None
+        plan_type = None
+        if membership_row:
+            account_id, account_role, plan_type = membership_row
+
         expiration = datetime.now(timezone.utc) + timedelta(hours=8)
-        payload = {"sub": email, "user_id": user_id, "exp": expiration}
+        payload = {
+            "sub": email,
+            "user_id": user_id,
+            "account_id": account_id,
+            "account_role": account_role,
+            "plan_type": plan_type,
+            "exp": expiration,
+        }
         token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
 
         return JSONResponse(
@@ -383,7 +498,13 @@ def login(user: UserLogin):
             content={
                 "message": "Login successful",
                 "token": token,
-                "user": {"id": user_id, "email": email},
+                "user": {
+                    "id": user_id,
+                    "email": email,
+                    "account_id": account_id,
+                    "account_role": account_role,
+                    "plan_type": plan_type,
+                },
             },
         )
     except Exception as exc:
