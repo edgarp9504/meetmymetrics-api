@@ -9,6 +9,7 @@ from fastapi import Header, HTTPException, status
 
 from app.auth.routes import SECRET_KEY
 from app.db.connection import get_connection
+from app.db.migrations import ensure_account_schema
 
 
 def get_current_user(authorization: Optional[str] = Header(default=None)):
@@ -31,9 +32,18 @@ def get_current_user(authorization: Optional[str] = Header(default=None)):
     row = None
     try:
         conn = get_connection()
+        ensure_account_schema(conn)
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, email, account_type FROM users WHERE id=%s",
+                """
+                SELECT u.id, u.email, am.account_id, am.role, a.plan_type, u.account_type
+                FROM users u
+                LEFT JOIN account_members am ON am.user_id = u.id
+                LEFT JOIN accounts a ON a.id = am.account_id
+                WHERE u.id = %s
+                ORDER BY CASE WHEN am.role = 'owner' THEN 0 ELSE 1 END NULLS LAST
+                LIMIT 1
+                """,
                 (user_id,),
             )
             row = cur.fetchone()
@@ -47,22 +57,28 @@ def get_current_user(authorization: Optional[str] = Header(default=None)):
         if conn:
             conn.close()
 
-    account_type = row[2] if len(row) > 2 else None
-    account_limit = _resolve_account_limit(account_type)
+    account_id = row[2]
+    account_role = row[3]
+    plan_type = row[4] or "free"
+    legacy_account_type = row[5] if len(row) > 5 else None
+    account_limit = _resolve_account_limit(plan_type)
 
     return SimpleNamespace(
         id=row[0],
         email=row[1],
-        account_type=account_type,
+        account_id=account_id,
+        account_role=account_role,
+        plan_type=plan_type,
+        account_type=legacy_account_type,
         account_limit=account_limit,
     )
 
 
-def _resolve_account_limit(account_type: Optional[str]) -> int:
-    if not account_type:
+def _resolve_account_limit(plan_type: Optional[str]) -> int:
+    if not plan_type:
         return 1
 
-    normalized = account_type.lower()
-    if normalized in {"free", "personal"}:
+    normalized = plan_type.lower()
+    if normalized == "free":
         return 1
     return 10

@@ -33,6 +33,26 @@ def _build_verification_html(user_name: str, verification_code: str) -> str:
     """
 
 
+def _build_invitation_html(inviter_name: str, invitation_link: str) -> str:
+    safe_inviter = inviter_name.strip() if inviter_name else "Alguien de MeetMyMetrics"
+    return f"""
+    <html>
+        <body style="font-family: Arial, sans-serif;">
+            <h2>Hola 👋</h2>
+            <p><strong>{safe_inviter}</strong> te ha invitado a colaborar en su cuenta de MeetMyMetrics.</p>
+            <p style="margin: 24px 0;">
+                <a href="{invitation_link}" style="background-color:#0078D4;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;">
+                    Aceptar invitación
+                </a>
+            </p>
+            <p>Si el botón no funciona, copia y pega este enlace en tu navegador:</p>
+            <p><a href="{invitation_link}">{invitation_link}</a></p>
+            <p>Este enlace expira en 72 horas.</p>
+        </body>
+    </html>
+    """
+
+
 def _log_missing_env(var_name: str) -> None:
     print(f"❌ Variable de entorno no configurada: {var_name}")
 
@@ -81,4 +101,48 @@ def send_verification_email(to_email: str, user_name: str, verification_code: st
         )
 
 
-__all__ = ["send_verification_email"]
+
+def send_account_invitation_email(to_email: str, inviter_name: str, token: str) -> None:
+    if not RESEND_API_KEY:
+        _log_missing_env("RESEND_API_KEY")
+        return
+
+    if not SENDER_EMAIL:
+        _log_missing_env("SENDER_EMAIL")
+        return
+
+    if not to_email:
+        print("❌ Dirección de correo destino no proporcionada.")
+        return
+
+    invitation_link = f"https://meetmymetrics.vercel.app/invite/accept?token={token}"
+    html_content = _build_invitation_html(inviter_name, invitation_link)
+
+    payload = {
+        "from": f"MeetMyMetrics <{SENDER_EMAIL}>",
+        "to": [to_email],
+        "subject": "Has sido invitado a MeetMyMetrics",
+        "html": html_content,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        response = requests.post(RESEND_URL, json=payload, headers=headers, timeout=10)
+    except requests.RequestException as exc:
+        print(f"❌ Excepción al enviar correo de invitación con Resend: {exc}")
+        return
+
+    if response.ok:
+        print(f"✅ Invitación enviada a {to_email}")
+    else:
+        print(
+            "❌ Error al enviar correo de invitación "
+            f"({response.status_code}): {response.text or response.reason}"
+        )
+
+
+__all__ = ["send_verification_email", "send_account_invitation_email"]
