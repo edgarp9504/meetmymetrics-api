@@ -308,6 +308,29 @@ def register(user: UserRegister, request: Request):
                 linked_via_invitation = False
 
         if not linked_via_invitation:
+            # Verificar si el usuario ya pertenece a una cuenta existente (como owner o invitado)
+            cur.execute(
+                """
+                SELECT am.account_id, am.role
+                FROM account_members am
+                JOIN users u ON u.id = am.user_id
+                WHERE u.email = %s
+                """,
+                (normalized_email,),
+            )
+            if cur.fetchone():
+                logger.warning(
+                    "Usuario ya asociado a una cuenta existente: %s",
+                    normalized_email,
+                )
+                if conn:
+                    conn.rollback()
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "El usuario ya pertenece a una cuenta existente o fue invitado.",
+                    },
+                )
             cur.execute(
                 """
                 INSERT INTO accounts (owner_user_id, plan_type)
