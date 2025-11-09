@@ -245,7 +245,7 @@ def register(user: UserRegister, request: Request):
         linked_via_invitation = False
         cur.execute(
             """
-            SELECT id, account_id, invited_by, expires_at, status
+            SELECT id, account_id, invited_by_user_id, expires_at, status
             FROM account_invitations
             WHERE lower(email) = lower(%s)
             ORDER BY created_at DESC
@@ -260,7 +260,7 @@ def register(user: UserRegister, request: Request):
             (
                 invitation_id,
                 invitation_account_id,
-                invitation_invited_by,
+                invitation_invited_by_user_id,
                 invitation_expires,
                 invitation_status,
             ) = invitation_row
@@ -277,16 +277,16 @@ def register(user: UserRegister, request: Request):
             ):
                 cur.execute(
                     """
-                    INSERT INTO account_members (account_id, user_id, role, invited_by)
+                    INSERT INTO account_members (account_id, user_id, role, invited_by_user_id)
                     VALUES (%s, %s, %s, %s)
                     ON CONFLICT (account_id, user_id)
-                    DO UPDATE SET invited_by = EXCLUDED.invited_by
+                    DO UPDATE SET invited_by_user_id = EXCLUDED.invited_by_user_id
                     """,
                     (
                         invitation_account_id,
                         user_id,
                         "member",
-                        invitation_invited_by,
+                        invitation_invited_by_user_id,
                     ),
                 )
                 cur.execute(
