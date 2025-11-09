@@ -9,6 +9,9 @@ import requests
 
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 SENDER_EMAIL = os.getenv("SENDER_EMAIL", "no-reply@resend.dev")
+FRONTEND_URL = os.getenv(
+    "FRONTEND_URL", "https://meetmymetrics.azurestaticapps.net"
+)
 RESEND_URL = "https://api.resend.com/emails"
 
 
@@ -115,7 +118,7 @@ def send_account_invitation_email(to_email: str, inviter_name: str, token: str) 
         print("❌ Dirección de correo destino no proporcionada.")
         return
 
-    invitation_link = f"https://meetmymetrics.vercel.app/invite/accept?token={token}"
+    invitation_link = f"{FRONTEND_URL.rstrip('/')}/invite/accept?token={token}"
     html_content = _build_invitation_html(inviter_name, invitation_link)
 
     payload = {
