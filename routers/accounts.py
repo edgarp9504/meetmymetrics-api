@@ -109,7 +109,7 @@ def create_invitation(
                 """
                 SELECT id, status, expires_at
                 FROM account_invitations
-                WHERE account_id = %s AND lower(email) = %s
+                WHERE account_id = %s AND lower(invited_email) = %s
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -175,8 +175,7 @@ def create_invitation(
                     SET token = %s,
                         expires_at = %s,
                         status = 'pending',
-                        invited_by = %s,
-                        accepted_at = NULL,
+                        invited_by_user_id = %s,
                         created_at = NOW()
                     WHERE id = %s
                     """,
@@ -187,11 +186,11 @@ def create_invitation(
                     """
                     INSERT INTO account_invitations (
                         account_id,
-                        email,
+                        invited_email,
                         token,
                         status,
                         expires_at,
-                        invited_by
+                        invited_by_user_id
                     )
                     VALUES (%s, %s, %s, 'pending', %s, %s)
                     """,
@@ -246,7 +245,7 @@ def accept_invitation(payload: AccountInvitationAcceptRequest):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, account_id, email, expires_at, status, invited_by
+                SELECT id, account_id, invited_email, expires_at, status, invited_by_user_id
                 FROM account_invitations
                 WHERE token = %s
                 """,
@@ -266,7 +265,7 @@ def accept_invitation(payload: AccountInvitationAcceptRequest):
                 invited_email,
                 expires_at,
                 status_value,
-                invited_by,
+                invited_by_user_id,
             ) = invitation_row
 
             expires_at = _normalize_timestamp(expires_at)
@@ -346,12 +345,12 @@ def accept_invitation(payload: AccountInvitationAcceptRequest):
 
             cur.execute(
                 """
-                INSERT INTO account_members (account_id, user_id, role, invited_by)
+                INSERT INTO account_members (account_id, user_id, role, invited_by_user_id)
                 VALUES (%s, %s, %s, %s)
                 ON CONFLICT (account_id, user_id)
                 DO NOTHING
                 """,
-                (account_id, user_id, "member", invited_by),
+                (account_id, user_id, "member", invited_by_user_id),
             )
 
             cur.execute(
