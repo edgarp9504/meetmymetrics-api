@@ -393,11 +393,20 @@ def list_members(user=Depends(get_current_user)):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT u.id, u.email, u.first_name, u.last_name, am.role, am.invited_by, am.joined_at
+                SELECT 
+                    u.id,
+                    u.email,
+                    u.first_name,
+                    u.last_name,
+                    am.role,
+                    am.invited_by_user_id,
+                    am.created_at
                 FROM account_members am
                 JOIN users u ON u.id = am.user_id
                 WHERE am.account_id = %s
-                ORDER BY CASE WHEN am.role = 'owner' THEN 0 ELSE 1 END, am.joined_at
+                ORDER BY 
+                    CASE WHEN am.role = 'owner' THEN 0 ELSE 1 END,
+                    am.created_at
                 """,
                 (user.account_id,),
             )
