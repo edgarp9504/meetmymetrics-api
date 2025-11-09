@@ -331,13 +331,14 @@ def register(user: UserRegister, request: Request):
                         "error": "El usuario ya pertenece a una cuenta existente o fue invitado.",
                     },
                 )
+            display_name = f"Cuenta de {first_name or 'Usuario'}"
             cur.execute(
                 """
-                INSERT INTO accounts (owner_user_id, plan_type)
-                VALUES (%s, %s)
+                INSERT INTO accounts (owner_user_id, name, plan_type)
+                VALUES (%s, %s, %s)
                 RETURNING id
                 """,
-                (user_id, "free"),
+                (user_id, display_name, "free"),
             )
             account_id = cur.fetchone()[0]
             cur.execute(
