@@ -247,7 +247,7 @@ def register(user: UserRegister, request: Request):
             """
             SELECT id, account_id, invited_by_user_id, expires_at, status
             FROM account_invitations
-            WHERE lower(email) = lower(%s)
+            WHERE lower(invited_email) = lower(%s)
             ORDER BY created_at DESC
             LIMIT 1
             """,
