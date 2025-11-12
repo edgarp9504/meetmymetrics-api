@@ -8,9 +8,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
 
 from dependencies import get_current_user
+from app.db.audit import log_action, safe_log_action
 from app.db.connection import get_connection
 from app.db.migrations import ensure_account_schema
-from app.utils.email import send_account_invitation_email
+from app.utils.email import send_account_invitation_email, send_email
 from app.utils.hashing import get_password_hash
 from app.utils.validation import validate_password_strength
 
@@ -34,6 +35,10 @@ class AccountInvitationAcceptRequest(BaseModel):
     last_name: Optional[str] = None
 
 
+class UpgradePlanRequest(BaseModel):
+    plan_type: str = Field(..., min_length=3, max_length=20)
+
+
 class AccountMemberOut(BaseModel):
     id: int
     email: str
@@ -42,6 +47,12 @@ class AccountMemberOut(BaseModel):
     role: str
     invited_by: Optional[int]
     joined_at: datetime
+
+
+class AccountActivityEntry(BaseModel):
+    action_type: str
+    description: Optional[str]
+    created_at: datetime
 
 
 router = APIRouter(prefix="/accounts", tags=["Accounts"])
@@ -204,6 +215,17 @@ def create_invitation(
                 )
 
         conn.commit()
+
+        try:
+            log_action(
+                conn,
+                user.id,
+                user.account_id,
+                "INVITATION_SENT",
+                f"Se envió una invitación a {normalized_email}",
+            )
+        except Exception as log_exc:
+            print(f"⚠️ No se pudo registrar la auditoría de invitación: {log_exc}")
     except HTTPException:
         if conn:
             conn.rollback()
@@ -236,6 +258,10 @@ def accept_invitation(payload: AccountInvitationAcceptRequest):
         )
 
     conn = None
+    owner_email = None
+    invited_first_name = (payload.first_name or "").strip()
+    invited_last_name = (payload.last_name or "").strip()
+    new_user_id: Optional[int] = None
     try:
         conn = get_connection()
         ensure_account_schema(conn)
@@ -245,7 +271,15 @@ def accept_invitation(payload: AccountInvitationAcceptRequest):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, account_id, invited_email, expires_at, status, invited_by_user_id
+                SELECT
+                    id,
+                    account_id,
+                    invited_email,
+                    expires_at,
+                    status,
+                    invited_by_user_id,
+                    invited_first_name,
+                    invited_last_name
                 FROM account_invitations
                 WHERE token = %s
                 """,
@@ -266,9 +300,18 @@ def accept_invitation(payload: AccountInvitationAcceptRequest):
                 expires_at,
                 status_value,
                 invited_by_user_id,
+                invitation_first_name,
+                invitation_last_name,
             ) = invitation_row
 
             expires_at = _normalize_timestamp(expires_at)
+
+            invited_first_name = (
+                (invitation_first_name or "").strip() or invited_first_name
+            )
+            invited_last_name = (
+                (invitation_last_name or "").strip() or invited_last_name
+            )
 
             if status_value != "pending":
                 raise HTTPException(
@@ -353,12 +396,38 @@ def accept_invitation(payload: AccountInvitationAcceptRequest):
                 (account_id, user_id, "member", invited_by_user_id),
             )
 
+            new_user_id = user_id
+
             cur.execute(
                 "UPDATE account_invitations SET status='accepted', accepted_at=%s WHERE id=%s",
                 (now_utc, invitation_id),
             )
 
+            cur.execute(
+                """
+                SELECT u.email
+                FROM users u
+                JOIN accounts a ON a.owner_user_id = u.id
+                WHERE a.id = %s
+                """,
+                (account_id,),
+            )
+            owner_row = cur.fetchone()
+            if owner_row:
+                owner_email = owner_row[0]
+
         conn.commit()
+
+        try:
+            log_action(
+                conn,
+                new_user_id,
+                account_id,
+                "INVITATION_ACCEPTED",
+                f"{invited_email} se unió a la cuenta",
+            )
+        except Exception as log_exc:
+            print(f"⚠️ No se pudo registrar la auditoría de aceptación: {log_exc}")
     except HTTPException:
         if conn:
             conn.rollback()
@@ -374,7 +443,105 @@ def accept_invitation(payload: AccountInvitationAcceptRequest):
         if conn:
             conn.close()
 
+    if owner_email:
+        subject = "Nuevo miembro en tu cuenta MeetMyMetrics"
+        safe_first_name = invited_first_name or ""
+        safe_last_name = invited_last_name or ""
+        invited_full_name = (f"{safe_first_name} {safe_last_name}").strip() or invited_email
+        html_body = f"""
+        <p>Hola 👋,</p>
+        <p>Tu invitado <b>{invited_full_name}</b> ha aceptado la invitación y se unió a tu cuenta.</p>
+        <p>Saludos,<br>El equipo de MeetMyMetrics</p>
+        """
+
+        send_email(
+            {
+                "from": "MeetMyMetrics <no-reply@meetmymetrics.com>",
+                "to": [owner_email],
+                "subject": subject,
+                "html": html_body,
+            }
+        )
+
+        safe_log_action(
+            new_user_id,
+            account_id,
+            "NOTIFICATION_SENT",
+            f"Se notificó al propietario {owner_email}",
+        )
+
     return {"message": "Invitación aceptada. Ya puedes iniciar sesión."}
+
+
+@router.post("/upgrade-plan")
+def upgrade_plan(request: UpgradePlanRequest, user=Depends(get_current_user)):
+    if not user.account_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El usuario no tiene una cuenta asociada.",
+        )
+
+    if user.account_role != "owner":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo el propietario puede cambiar el plan.",
+        )
+
+    requested_plan = request.plan_type.strip().lower()
+    valid_plans = {"free", "pro", "business"}
+    if requested_plan not in valid_plans:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Plan no válido.")
+
+    conn = None
+    try:
+        conn = get_connection()
+        ensure_account_schema(conn)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE accounts
+                SET plan_type = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (requested_plan, user.account_id),
+            )
+
+            if cur.rowcount == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Cuenta no encontrada.",
+                )
+
+        conn.commit()
+
+        try:
+            log_action(
+                conn,
+                user.id,
+                user.account_id,
+                "PLAN_UPGRADED",
+                f"Cuenta actualizada a {requested_plan.upper()}",
+            )
+        except Exception as log_exc:
+            print(f"⚠️ No se pudo registrar la auditoría de cambio de plan: {log_exc}")
+    except HTTPException:
+        if conn:
+            conn.rollback()
+        raise
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo actualizar el plan de la cuenta.",
+        ) from exc
+    finally:
+        if conn:
+            conn.close()
+
+    return {"message": f"Plan actualizado a {requested_plan.upper()} correctamente."}
 
 
 @router.get("/members", response_model=list[AccountMemberOut])
@@ -430,6 +597,52 @@ def list_members(user=Depends(get_current_user)):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="No se pudieron obtener los miembros de la cuenta.",
+        ) from exc
+    finally:
+        if conn:
+            conn.close()
+
+
+@router.get("/activity", response_model=list[AccountActivityEntry])
+def get_account_activity(user=Depends(get_current_user)):
+    if not user.account_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El usuario no tiene una cuenta asociada.",
+        )
+
+    conn = None
+    try:
+        conn = get_connection()
+        ensure_account_schema(conn)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT action_type, description, created_at
+                FROM audit_log
+                WHERE account_id = %s
+                ORDER BY created_at DESC
+                LIMIT 50
+                """,
+                (user.account_id,),
+            )
+            rows = cur.fetchall()
+
+        return [
+            AccountActivityEntry(
+                action_type=row[0],
+                description=row[1],
+                created_at=row[2],
+            )
+            for row in rows
+        ]
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo obtener la actividad de la cuenta.",
         ) from exc
     finally:
         if conn:

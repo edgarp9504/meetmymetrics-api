@@ -60,9 +60,30 @@ def _log_missing_env(var_name: str) -> None:
     print(f"❌ Variable de entorno no configurada: {var_name}")
 
 
-def send_verification_email(to_email: str, user_name: str, verification_code: str) -> None:
-    """Send a verification email using the Resend transactional email service."""
+def _send(payload: dict) -> None:
+    headers = {
+        "Authorization": f"Bearer {RESEND_API_KEY}",
+        "Content-Type": "application/json",
+    }
 
+    try:
+        response = requests.post(RESEND_URL, json=payload, headers=headers, timeout=10)
+    except requests.RequestException as exc:
+        print(f"❌ Excepción al enviar correo con Resend: {exc}")
+        return
+
+    if response.ok:
+        print(
+            f"✅ Correo enviado a {', '.join(payload.get('to', []))} con asunto '{payload.get('subject', '')}'"
+        )
+    else:
+        print(
+            "❌ Error al enviar correo "
+            f"({response.status_code}): {response.text or response.reason}"
+        )
+
+
+def send_email(payload: dict) -> None:
     if not RESEND_API_KEY:
         _log_missing_env("RESEND_API_KEY")
         return
@@ -70,6 +91,19 @@ def send_verification_email(to_email: str, user_name: str, verification_code: st
     if not SENDER_EMAIL:
         _log_missing_env("SENDER_EMAIL")
         return
+
+    to_recipients = payload.get("to")
+    if not to_recipients:
+        print("❌ Dirección de correo destino no proporcionada.")
+        return
+
+    payload.setdefault("from", f"MeetMyMetrics <{SENDER_EMAIL}>")
+
+    _send(payload)
+
+
+def send_verification_email(to_email: str, user_name: str, verification_code: str) -> None:
+    """Send a verification email using the Resend transactional email service."""
 
     if not to_email:
         print("❌ Dirección de correo destino no proporcionada.")
@@ -84,36 +118,11 @@ def send_verification_email(to_email: str, user_name: str, verification_code: st
         "html": html_content,
     }
 
-    headers = {
-        "Authorization": f"Bearer {RESEND_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        response = requests.post(RESEND_URL, json=payload, headers=headers, timeout=10)
-    except requests.RequestException as exc:
-        print(f"❌ Excepción al enviar correo con Resend: {exc}")
-        return
-
-    if response.ok:
-        print(f"✅ Correo de verificación enviado a {to_email}")
-    else:
-        print(
-            "❌ Error al enviar correo "
-            f"({response.status_code}): {response.text or response.reason}"
-        )
+    send_email(payload)
 
 
 
 def send_account_invitation_email(to_email: str, inviter_name: str, token: str) -> None:
-    if not RESEND_API_KEY:
-        _log_missing_env("RESEND_API_KEY")
-        return
-
-    if not SENDER_EMAIL:
-        _log_missing_env("SENDER_EMAIL")
-        return
-
     if not to_email:
         print("❌ Dirección de correo destino no proporcionada.")
         return
@@ -128,24 +137,7 @@ def send_account_invitation_email(to_email: str, inviter_name: str, token: str) 
         "html": html_content,
     }
 
-    headers = {
-        "Authorization": f"Bearer {RESEND_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        response = requests.post(RESEND_URL, json=payload, headers=headers, timeout=10)
-    except requests.RequestException as exc:
-        print(f"❌ Excepción al enviar correo de invitación con Resend: {exc}")
-        return
-
-    if response.ok:
-        print(f"✅ Invitación enviada a {to_email}")
-    else:
-        print(
-            "❌ Error al enviar correo de invitación "
-            f"({response.status_code}): {response.text or response.reason}"
-        )
+    send_email(payload)
 
 
-__all__ = ["send_verification_email", "send_account_invitation_email"]
+__all__ = ["send_email", "send_verification_email", "send_account_invitation_email"]

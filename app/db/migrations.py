@@ -83,6 +83,21 @@ def ensure_account_schema(conn: PGConnection) -> None:
             """
         )
 
+        # Tabla: audit_log
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public.audit_log (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES public.users(id) ON DELETE SET NULL,
+                account_id INTEGER REFERENCES public.accounts(id) ON DELETE SET NULL,
+                action_type VARCHAR(50) NOT NULL,
+                description TEXT,
+                ip_address VARCHAR(50),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
+
 
 __all__ = ["ensure_account_schema"]
 
