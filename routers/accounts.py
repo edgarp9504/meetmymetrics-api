@@ -41,6 +41,7 @@ class UpgradePlanRequest(BaseModel):
 
 class AccountMemberOut(BaseModel):
     id: int
+    user_id: int
     email: str
     first_name: Optional[str]
     last_name: Optional[str]
@@ -653,7 +654,8 @@ def list_members(user=Depends(get_current_user)):
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT 
+                SELECT
+                    am.id,
                     u.id,
                     u.email,
                     u.first_name,
@@ -675,12 +677,13 @@ def list_members(user=Depends(get_current_user)):
         members = [
             AccountMemberOut(
                 id=row[0],
-                email=row[1],
-                first_name=row[2],
-                last_name=row[3],
-                role=row[4],
-                invited_by=row[5],
-                joined_at=row[6],
+                user_id=row[1],
+                email=row[2],
+                first_name=row[3],
+                last_name=row[4],
+                role=row[5],
+                invited_by=row[6],
+                joined_at=row[7],
             )
             for row in rows
         ]
