@@ -246,6 +246,100 @@ def create_invitation(
     return {"message": "Invitación enviada correctamente."}
 
 
+@router.delete("/members/{member_id}")
+def remove_member(member_id: int, user=Depends(get_current_user)):
+    """Permite al propietario eliminar un miembro de su cuenta."""
+
+    if not user.account_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El usuario no tiene una cuenta asociada.",
+        )
+
+    conn = None
+    try:
+        conn = get_connection()
+        ensure_account_schema(conn)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT role
+                FROM account_members
+                WHERE account_id = %s AND user_id = %s
+                """,
+                (user.account_id, user.id),
+            )
+            role_row = cur.fetchone()
+
+        if not role_row or role_row[0] != "owner":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Solo el propietario puede eliminar miembros.",
+            )
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT user_id, role
+                FROM account_members
+                WHERE id = %s AND account_id = %s
+                """,
+                (member_id, user.account_id),
+            )
+            member_row = cur.fetchone()
+
+        if not member_row:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Miembro no encontrado en esta cuenta.",
+            )
+
+        _, member_role = member_row
+
+        if member_role == "owner":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No es posible eliminar al propietario de la cuenta.",
+            )
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM account_members
+                WHERE id = %s AND account_id = %s
+                """,
+                (member_id, user.account_id),
+            )
+
+        conn.commit()
+
+        log_action(
+            conn,
+            user.id,
+            user.account_id,
+            "MEMBER_REMOVED",
+            f"Miembro ID {member_id} eliminado",
+        )
+
+        return {"message": "Miembro eliminado correctamente."}
+
+    except HTTPException:
+        if conn:
+            conn.rollback()
+        raise
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error eliminando miembro: {exc}",
+        ) from exc
+    finally:
+        if conn:
+            conn.close()
+
+
 @router.post("/invitations/accept")
 def accept_invitation(payload: AccountInvitationAcceptRequest):
     if not validate_password_strength(payload.password):
