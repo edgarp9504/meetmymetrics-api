@@ -16,6 +16,13 @@ from app.utils.hashing import get_password_hash
 from app.utils.validation import validate_password_strength
 
 
+PLAN_MEMBER_LIMITS = {
+    "free": 2,
+    "pro": 5,
+    "business": 999,
+}
+
+
 def _normalize_timestamp(value: Optional[datetime]) -> Optional[datetime]:
     if value is None:
         return None
@@ -59,6 +66,53 @@ class AccountActivityEntry(BaseModel):
 router = APIRouter(prefix="/accounts", tags=["Accounts"])
 
 
+@router.get("/plan-info")
+def get_account_plan_info(user=Depends(get_current_user)):
+    """Return plan information and whether the account can invite more members."""
+
+    conn = None
+    try:
+        conn = get_connection()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT plan_type
+                FROM accounts
+                WHERE id = %s
+                """,
+                (user.account_id,),
+            )
+            plan_row = cur.fetchone()
+            plan_type = plan_row[0] if plan_row else "free"
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM account_members
+                WHERE account_id = %s
+                """,
+                (user.account_id,),
+            )
+            current_members = cur.fetchone()[0]
+
+        limit = PLAN_MEMBER_LIMITS.get(plan_type, 1)
+
+        return {
+            "plan_type": plan_type,
+            "current_members": current_members,
+            "limit": limit,
+            "can_invite": current_members < limit,
+        }
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error obteniendo información del plan: {exc}",
+        ) from exc
+    finally:
+        if conn:
+            conn.close()
+
+
 @router.post("/invitations", status_code=status.HTTP_201_CREATED)
 def create_invitation(
     payload: AccountInvitationRequest,
@@ -89,6 +143,31 @@ def create_invitation(
         conn = get_connection()
         ensure_account_schema(conn)
         now_utc = datetime.utcnow()
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT plan_type FROM accounts WHERE id = %s",
+                (user.account_id,),
+            )
+            plan_row = cur.fetchone()
+            plan_type = plan_row[0] if plan_row else "free"
+
+            cur.execute(
+                "SELECT COUNT(*) FROM account_members WHERE account_id = %s",
+                (user.account_id,),
+            )
+            current_members = cur.fetchone()[0]
+
+            limit = PLAN_MEMBER_LIMITS.get(plan_type, 1)
+
+            if current_members >= limit:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Tu plan actual ({plan_type}) alcanzó el límite máximo de "
+                        f"miembros permitidos ({limit - 1})."
+                    ),
+                )
 
         with conn.cursor() as cur:
             cur.execute(
@@ -146,36 +225,6 @@ def create_invitation(
                     invitation_row = None
                 else:
                     existing_status = invitation_row[1]
-
-            if user.plan_type == "free":
-                cur.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM account_members
-                    WHERE account_id = %s AND role <> 'owner'
-                    """,
-                    (user.account_id,),
-                )
-                member_count = cur.fetchone()[0] or 0
-
-                cur.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM account_invitations
-                    WHERE account_id = %s AND status = 'pending'
-                    """,
-                    (user.account_id,),
-                )
-                pending_count = cur.fetchone()[0] or 0
-
-                if invitation_row and existing_status == "pending":
-                    pending_count -= 1
-
-                if member_count + pending_count >= 1:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Solo puedes invitar a un usuario en el plan gratuito.",
-                    )
 
             token = token_urlsafe(48)
             expires_at = now_utc + timedelta(hours=72)
