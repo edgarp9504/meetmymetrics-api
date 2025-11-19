@@ -26,6 +26,9 @@ class OAuthToken(Base):
     token_type = Column(String(40))
     expires_at = Column(TIMESTAMP)
     scope = Column(String(255))
+    developer_token = Column(String(255))
+    customer_id = Column(String(100))
+    login_customer_id = Column(String(100))
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 

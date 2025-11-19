@@ -19,6 +19,7 @@ class Settings:
         self.google_ads_client_id: Optional[str] = None
         self.google_ads_client_secret: Optional[str] = None
         self.google_ads_developer_token: Optional[str] = None
+        self.google_ads_login_mcc_id: Optional[str] = None
         self.tiktok_client_key: Optional[str] = None
         self.tiktok_client_secret: Optional[str] = None
         self.linkedin_client_id: Optional[str] = None
@@ -59,6 +60,11 @@ class Settings:
                 "GOOGLE-ADS-DEVELOPER-TOKEN",
                 env_fallback="GOOGLE_ADS_DEVELOPER_TOKEN",
             )
+            self.google_ads_login_mcc_id = self._get_secret(
+                client,
+                "GOOGLE-ADS-LOGIN-MCC-ID",
+                env_fallback="GOOGLE_ADS_LOGIN_MCC_ID",
+            )
             self.tiktok_client_key = self._get_secret(
                 client, "TIKTOK-CLIENT-KEY", env_fallback="TIKTOK_CLIENT_KEY"
             )
@@ -90,6 +96,7 @@ class Settings:
             self.google_ads_client_id = os.getenv("GOOGLE_ADS_CLIENT_ID")
             self.google_ads_client_secret = os.getenv("GOOGLE_ADS_CLIENT_SECRET")
             self.google_ads_developer_token = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN")
+            self.google_ads_login_mcc_id = os.getenv("GOOGLE_ADS_LOGIN_MCC_ID")
             self.tiktok_client_key = os.getenv("TIKTOK_CLIENT_KEY")
             self.tiktok_client_secret = os.getenv("TIKTOK_CLIENT_SECRET")
             self.linkedin_client_id = os.getenv("LINKEDIN_CLIENT_ID")

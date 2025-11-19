@@ -15,9 +15,9 @@ class AdAccountBase(BaseModel):
     account_status: Optional[str] = None
     business_id: Optional[str] = None
     business_name: Optional[str] = None
-    access_token: Optional[str] = None
-    token_expiry: Optional[datetime] = None
     is_active: Optional[bool] = True
+    customer_id: Optional[str] = None
+    is_manager: Optional[bool] = False
 
 
 class AdAccountCreate(AdAccountBase):
@@ -40,10 +40,14 @@ class OAuthProviderAccount(BaseModel):
     account_status: Optional[str]
     business_name: Optional[str] = None
     business_id: Optional[str] = None
+    customer_id: Optional[str] = None
+    login_customer_id: Optional[str] = None
 
 
 class OAuthCallbackResponse(BaseModel):
     accounts: list[OAuthProviderAccount]
+    customer_id: Optional[str] = None
+    login_customer_id: Optional[str] = None
 
 
 class OAuthConnectRequest(BaseModel):
@@ -54,6 +58,8 @@ class OAuthConnectRequest(BaseModel):
     account_status: Optional[str] = None
     business_name: Optional[str] = None
     business_id: Optional[str] = None
+    customer_id: Optional[str] = None
+    login_customer_id: Optional[str] = None
 
 
 class OAuthDisconnectRequest(BaseModel):
