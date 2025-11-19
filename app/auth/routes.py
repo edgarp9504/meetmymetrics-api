@@ -5,13 +5,13 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 from typing import Deque, Dict, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import jwt
 from jwt import InvalidTokenError
 from authlib.integrations.starlette_client import OAuth, OAuthError
-from fastapi import APIRouter, Header, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from app.auth.schemas import (
     UpdatePasswordRequest,
@@ -30,6 +30,7 @@ from app.utils.validation import (
     validate_password_strength,
 )
 from app.utils.email import send_verification_email
+from routers.oauth import _build_redirect_uri, _require_credentials, _store_state
 
 
 def resend_verification_code(conn, email: str) -> str:
@@ -604,28 +605,55 @@ def update_password(
         if conn:
             conn.close()
 
-@router.get("/google/login")
+@router.get("/google/login", response_class=RedirectResponse)
 async def google_login(request: Request):
+    """
+    Flujo OAuth de Google — versión robusta.
+    Acepta tanto `app_origin` como `origin` para evitar errores.
+    """
+
     if not GOOGLE_OAUTH_ENABLED:
         logger.error("Attempted Google login without configured credentials")
-        return JSONResponse(
-            status_code=400, content={"error": "Google authentication failed"}
+        raise HTTPException(
+            status_code=400, detail="Google authentication failed"
         )
 
-    app_origin_param = request.query_params.get("app_origin")
-    if not app_origin_param:
-        logger.error("Missing app_origin in Google login request")
-        return JSONResponse(status_code=400, content={"error": "Missing app_origin"})
-
-    state_token = token_urlsafe(32)
-    request.session["oauth_state"] = state_token
-    request.session["app_origin"] = app_origin_param
-
-    redirect_uri = "https://meetmymetrics-api.azurewebsites.net/auth/google/callback"
-    logger.info("Using Google redirect_uri: %s", redirect_uri)
-    return await oauth.google.authorize_redirect(
-        request, redirect_uri, state=state_token
+    app_origin = (
+        request.query_params.get("app_origin")
+        or request.query_params.get("origin")
+        or request.headers.get("origin")
     )
+
+    if not app_origin:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing app_origin in Google login request",
+        )
+
+    provider = "google"
+    redirect_uri = _build_redirect_uri(provider)
+    client_id, _ = _require_credentials(provider)
+
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "access_type": "offline",
+        "prompt": "consent",
+        "scope": (
+            "openid "
+            "https://www.googleapis.com/auth/userinfo.email "
+            "https://www.googleapis.com/auth/userinfo.profile "
+            "https://www.googleapis.com/auth/adwords"
+        ),
+        "state": token_urlsafe(32),
+    }
+
+    _store_state(request, provider, params["state"])
+    request.session["app_origin"] = app_origin
+
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+    return RedirectResponse(url=auth_url, status_code=302)
 
 
 @router.get("/google/callback")
