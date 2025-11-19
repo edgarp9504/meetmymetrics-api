@@ -22,10 +22,8 @@ from dependencies import get_current_user
 from models import AdAccount, ApiLog, OAuthToken, UserAdAccount
 from routers.ad_accounts import count_user_accounts
 from schemas import (
-    OAuthCallbackResponse,
     OAuthConnectRequest,
     OAuthDisconnectRequest,
-    OAuthProviderAccount,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,18 +105,32 @@ def meta_login(request: Request, origin: str | None = None):
 
 
 @router.get("/{provider}/login", response_class=RedirectResponse)
-async def oauth_login(provider: str, request: Request) -> RedirectResponse:
+async def oauth_login(provider: str, request: Request):
     provider = _normalize_provider(provider)
-    authorization_url = _build_authorization_url(provider)
+
+    app_origin = (
+        request.query_params.get("app_origin")
+        or request.query_params.get("origin")
+        or request.headers.get("origin")
+    )
+
+    if not app_origin:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing app_origin in Google login request"
+        )
 
     state = token_urlsafe(32)
-    _store_state(request, provider, state)
 
+    _store_state(request, provider, {"state": state, "app_origin": app_origin})
+
+    authorization_url = _build_authorization_url(provider)
     url_with_state = f"{authorization_url}&state={state}"
-    return RedirectResponse(url=url_with_state, status_code=status.HTTP_302_FOUND)
+
+    return RedirectResponse(url=url_with_state)
 
 
-@router.get("/{provider}/callback", response_model=OAuthCallbackResponse)
+@router.get("/{provider}/callback", response_class=RedirectResponse)
 async def oauth_callback(
     provider: str,
     request: Request,
@@ -136,7 +148,7 @@ async def oauth_callback(
     if not code or not state:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing code or state")
 
-    _validate_state(request, provider, state)
+    app_origin = _validate_state(request, provider, state)
 
     redirect_uri = _build_redirect_uri(provider)
     token_data = await _exchange_code_for_token(provider, code, redirect_uri)
@@ -153,22 +165,7 @@ async def oauth_callback(
         logger.exception("Failed to persist OAuth callback information", exc_info=exc)
         raise HTTPException(status_code=500, detail="Error storing OAuth information") from exc
 
-    response_accounts = [
-        OAuthProviderAccount(
-            id=account.get("id"),
-            name=account.get("name"),
-            currency=account.get("currency"),
-            timezone_name=account.get("timezone_name"),
-            account_status=account.get("status"),
-            business_name=account.get("business_name"),
-            business_id=account.get("business_id"),
-            customer_id=account.get("customer_id"),
-            login_customer_id=account.get("login_customer_id"),
-        )
-        for account in account_list
-    ]
-
-    return OAuthCallbackResponse(accounts=response_accounts)
+    return RedirectResponse(url=f"{app_origin}?connected={provider}", status_code=302)
 
 
 @router.post("/{provider}/connect")
@@ -324,19 +321,21 @@ def _normalize_provider(provider: str) -> str:
     return normalized
 
 
-def _store_state(request: Request, provider: str, state: str) -> None:
+def _store_state(request: Request, provider: str, value: dict):
     state_container = request.session.get(STATE_SESSION_KEY, {})
-    state_container[provider] = state
+    state_container[provider] = value
     request.session[STATE_SESSION_KEY] = state_container
 
 
-def _validate_state(request: Request, provider: str, state: str) -> None:
+def _validate_state(request: Request, provider: str, state: str):
     state_container = request.session.get(STATE_SESSION_KEY, {})
-    stored_state = state_container.pop(provider, None)
+    record = state_container.pop(provider, None)
     request.session[STATE_SESSION_KEY] = state_container
 
-    if not stored_state or stored_state != state:
+    if not record or record["state"] != state:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid state parameter")
+
+    return record["app_origin"]
 
 
 def _build_authorization_url(provider: str) -> str:
