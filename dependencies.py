@@ -7,7 +7,7 @@ import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 from fastapi import Header, HTTPException, status
 
-from app.auth.routes import SECRET_KEY
+from app.core.security_keys import ALGORITHM, SECRET_KEY
 from app.db.connection import get_connection
 from app.db.migrations import ensure_account_schema
 
@@ -18,7 +18,7 @@ def get_current_user(authorization: Optional[str] = Header(default=None)):
 
     token = authorization.split(" ", 1)[1].strip()
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except ExpiredSignatureError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired")
     except (InvalidTokenError, Exception):
