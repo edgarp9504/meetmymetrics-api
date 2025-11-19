@@ -20,6 +20,7 @@ from app.auth.schemas import (
     VerifyCodeRequest,
 )
 from app.core.config import settings
+from app.core.security_keys import ALGORITHM, SECRET_KEY
 from app.core.security import create_access_token
 from app.db.connection import get_connection
 from app.db.migrations import ensure_account_schema
@@ -56,8 +57,6 @@ def resend_verification_code(conn, email: str) -> str:
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-SECRET_KEY = "super_secret_key"
 
 RATE_LIMIT_WINDOW_SECONDS = 60
 RATE_LIMIT_MAX_ATTEMPTS = 3
@@ -515,7 +514,7 @@ def login(user: UserLogin):
             "plan_type": plan_type,
             "exp": expiration,
         }
-        token = jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+        token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
         return JSONResponse(
             status_code=200,
@@ -555,7 +554,7 @@ def update_password(
 
     token = authorization.split("Bearer ", 1)[1].strip()
     try:
-        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id = decoded_token.get("user_id")
         if not user_id:
             raise ValueError("Missing user_id in token")

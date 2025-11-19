@@ -25,6 +25,7 @@ class Settings:
         self.linkedin_client_id: Optional[str] = None
         self.linkedin_client_secret: Optional[str] = None
         self.jwt_secret: Optional[str] = None
+        self.secret_key: Optional[str] = None
         self.token_encryption_key: Optional[str] = None
 
         if self.vault_uri:
@@ -86,6 +87,7 @@ class Settings:
                 "TOKEN-ENCRYPTION-KEY",
                 env_fallback="TOKEN_ENCRYPTION_KEY",
             )
+            self.secret_key = self.jwt_secret
         else:
             self.database_url = os.getenv("POSTGRES_CONNECTION_STRING")
             self.google_client_id = os.getenv("GOOGLE_CLIENT_ID")
@@ -102,6 +104,7 @@ class Settings:
             self.linkedin_client_id = os.getenv("LINKEDIN_CLIENT_ID")
             self.linkedin_client_secret = os.getenv("LINKEDIN_CLIENT_SECRET")
             self.token_encryption_key = os.getenv("TOKEN_ENCRYPTION_KEY")
+            self.secret_key = self.jwt_secret
 
         if not self.database_url:
             raise RuntimeError("Database URL is not configured")
