@@ -51,6 +51,10 @@ def debug_env_vars() -> Dict[str, Optional[str]]:
 
 STATE_SESSION_KEY = "oauth_states"
 SUPPORTED_PROVIDERS = {"meta", "google", "tiktok", "linkedin", "google_ads"}
+SCOPE = (
+    "openid https://www.googleapis.com/auth/userinfo.email "
+    "https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/adwords"
+)
 
 
 # Instrumented Meta OAuth login endpoint for detailed debugging
@@ -123,6 +127,37 @@ async def oauth_login(provider: str, request: Request):
     state = token_urlsafe(32)
 
     _store_state(request, provider, {"state": state, "app_origin": app_origin})
+
+    print(
+        ">>> STATE_GENERADO =",
+        state,
+        flush=True,
+    )
+    print(
+        ">>> ORIGIN_RECIBIDO =",
+        app_origin,
+        flush=True,
+    )
+
+    if provider == "google":
+        client_id, _ = _require_credentials(provider)
+        redirect_uri = _build_redirect_uri(provider)
+        print(
+            ">>> REDIRECT_URI_USADO_POR_BACKEND =",
+            redirect_uri,
+            flush=True,
+        )
+        google_auth_url = (
+            "https://accounts.google.com/o/oauth2/v2/auth"
+            f"?client_id={client_id}"
+            f"&redirect_uri={redirect_uri}"
+            f"&response_type=code"
+            f"&scope={SCOPE}"
+            f"&state={state}"
+            "&access_type=offline"
+            "&prompt=consent"
+        )
+        return RedirectResponse(url=google_auth_url)
 
     authorization_url = _build_authorization_url(provider)
     url_with_state = f"{authorization_url}&state={state}"
@@ -351,18 +386,6 @@ def _build_authorization_url(provider: str) -> str:
         }
         return f"https://www.facebook.com/v20.0/dialog/oauth?{urlencode(params)}"
 
-    if provider == "google":
-        client_id, _ = _require_credentials(provider)
-        params = {
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "response_type": "code",
-            "access_type": "offline",
-            "prompt": "consent",
-            "scope": "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/adwords",
-        }
-        return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
-
     if provider == "tiktok":
         client_key, _ = _require_credentials(provider)
         params = {
@@ -387,6 +410,18 @@ def _build_authorization_url(provider: str) -> str:
 
 
 def _build_redirect_uri(provider: str) -> str:
+    if provider == "google":
+        redirect_uri = os.getenv("GOOGLE_ADS_REDIRECT_URI")
+        parsed_redirect = urllib.parse.urlparse(redirect_uri or "")
+        if not redirect_uri or (
+            parsed_redirect.hostname and parsed_redirect.hostname.lower() == "localhost"
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="GOOGLE_ADS_REDIRECT_URI no configurado",
+            )
+        return redirect_uri
+
     return f"{settings.backend_url}/auth/{provider}/callback"
 
 
