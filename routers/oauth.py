@@ -411,14 +411,14 @@ def _build_authorization_url(provider: str) -> str:
 
 def _build_redirect_uri(provider: str) -> str:
     if provider == "google":
-        redirect_uri = os.getenv("GOOGLE_REDIRECT_URI")
+        redirect_uri = os.getenv("GOOGLE_ADS_REDIRECT_URI")
         parsed_redirect = urllib.parse.urlparse(redirect_uri or "")
         if not redirect_uri or (
             parsed_redirect.hostname and parsed_redirect.hostname.lower() == "localhost"
         ):
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="GOOGLE_REDIRECT_URI no configurado",
+                detail="GOOGLE_ADS_REDIRECT_URI no configurado",
             )
         return redirect_uri
 
