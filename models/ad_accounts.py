@@ -3,7 +3,6 @@ from sqlalchemy import (
     Column,
     Integer,
     String,
-    Text,
     TIMESTAMP,
     UniqueConstraint,
 )
@@ -24,8 +23,8 @@ class AdAccount(Base):
     account_status = Column(String(50))
     business_id = Column(String(100))
     business_name = Column(String(150))
-    access_token = Column(Text)
-    token_expiry = Column(TIMESTAMP)
+    customer_id = Column(String(100))
+    is_manager = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(

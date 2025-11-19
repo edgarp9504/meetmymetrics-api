@@ -52,7 +52,7 @@ def debug_env_vars() -> Dict[str, Optional[str]]:
     }
 
 STATE_SESSION_KEY = "oauth_states"
-SUPPORTED_PROVIDERS = {"meta", "google", "tiktok", "linkedin"}
+SUPPORTED_PROVIDERS = {"meta", "google", "tiktok", "linkedin", "google_ads"}
 
 
 # Instrumented Meta OAuth login endpoint for detailed debugging
@@ -162,6 +162,8 @@ async def oauth_callback(
             account_status=account.get("status"),
             business_name=account.get("business_name"),
             business_id=account.get("business_id"),
+            customer_id=account.get("customer_id"),
+            login_customer_id=account.get("login_customer_id"),
         )
         for account in account_list
     ]
@@ -198,7 +200,18 @@ def oauth_connect(
         "account_status": payload.account_status,
         "business_id": payload.business_id,
         "business_name": payload.business_name,
+        "customer_id": payload.customer_id,
+        "is_manager": False,
     }
+
+    if provider == "google":
+        google_customer_id = payload.customer_id or payload.account_id
+        account_data["customer_id"] = google_customer_id
+        account_data["is_manager"] = bool(
+            google_customer_id
+            and settings.google_ads_login_mcc_id
+            and google_customer_id == settings.google_ads_login_mcc_id
+        )
 
     if ad_account:
         for field, value in account_data.items():
@@ -304,6 +317,8 @@ def oauth_disconnect(
 
 def _normalize_provider(provider: str) -> str:
     normalized = provider.lower()
+    if normalized == "google_ads":
+        normalized = "google"
     if normalized not in SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proveedor no soportado")
     return normalized
@@ -345,7 +360,7 @@ def _build_authorization_url(provider: str) -> str:
             "response_type": "code",
             "access_type": "offline",
             "prompt": "consent",
-            "scope": "https://www.googleapis.com/auth/adwords",
+            "scope": "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/adwords",
         }
         return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
 
@@ -528,6 +543,8 @@ async def _fetch_provider_accounts(provider: str, access_token: str) -> List[Dic
                         "currency": None,
                         "timezone_name": None,
                         "status": None,
+                        "customer_id": customer_id,
+                        "login_customer_id": settings.google_ads_login_mcc_id,
                     }
                 )
             return accounts
@@ -583,8 +600,8 @@ def _require_credentials(provider: str) -> tuple[str, str]:
         client_id = settings.meta_app_id
         client_secret = settings.meta_app_secret
     elif provider == "google":
-        client_id = settings.google_ads_client_id or settings.google_client_id
-        client_secret = settings.google_ads_client_secret or settings.google_client_secret
+        client_id = settings.google_ads_client_id
+        client_secret = settings.google_ads_client_secret
     elif provider == "tiktok":
         client_id = settings.tiktok_client_key
         client_secret = settings.tiktok_client_secret
@@ -641,6 +658,13 @@ def _persist_token(db: Session, user_id: int, provider: str, token_data: Dict[st
     if expires_in:
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=int(expires_in))
 
+    developer_token = None
+    login_customer_id = token_data.get("login_customer_id")
+    customer_id = token_data.get("customer_id")
+    if provider == "google":
+        developer_token = settings.google_ads_developer_token
+        login_customer_id = login_customer_id or settings.google_ads_login_mcc_id
+
     existing = (
         db.query(OAuthToken)
         .filter(
@@ -655,6 +679,9 @@ def _persist_token(db: Session, user_id: int, provider: str, token_data: Dict[st
         existing.expires_at = expires_at
         existing.token_type = token_data.get("token_type")
         existing.scope = token_data.get("scope")
+        existing.developer_token = developer_token
+        existing.login_customer_id = login_customer_id
+        existing.customer_id = customer_id
     else:
         db.add(
             OAuthToken(
@@ -665,8 +692,64 @@ def _persist_token(db: Session, user_id: int, provider: str, token_data: Dict[st
                 expires_at=expires_at,
                 token_type=token_data.get("token_type"),
                 scope=token_data.get("scope"),
+                developer_token=developer_token,
+                login_customer_id=login_customer_id,
+                customer_id=customer_id,
             )
         )
+
+
+async def refresh_google_ads_token(user_id: int, db: Session) -> Dict[str, Any]:
+    """Refresh and persist a new Google Ads access token for a user."""
+
+    token_record = (
+        db.query(OAuthToken)
+        .filter(
+            and_(OAuthToken.user_id == user_id, OAuthToken.provider == "google")
+        )
+        .one_or_none()
+    )
+
+    if not token_record or not token_record.refresh_token_encrypted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No hay refresh token configurado para Google Ads",
+        )
+
+    encryptor = get_token_encryptor()
+    refresh_token = encryptor.decrypt(token_record.refresh_token_encrypted)
+    client_id, client_secret = _require_credentials("google")
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+    data = _validate_oauth_response(response)
+    access_token = data.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=500, detail="Google Ads no devolvió un access_token")
+
+    token_record.access_token_encrypted = encryptor.encrypt(access_token)
+    expires_in = data.get("expires_in")
+    if expires_in:
+        token_record.expires_at = datetime.now(timezone.utc) + timedelta(
+            seconds=int(expires_in)
+        )
+    token_record.token_type = data.get("token_type", token_record.token_type)
+    token_record.scope = data.get("scope", token_record.scope)
+
+    db.add(token_record)
+    db.commit()
+    db.refresh(token_record)
+    return data
 
 
 def _log_event(
