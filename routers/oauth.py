@@ -31,11 +31,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["OAuth2 Providers"])
 debug_router = APIRouter()
 
-DEFAULT_GOOGLE_ADS_REDIRECT_URI = (
-    "https://meetmymetrics-api.azurewebsites.net/auth/google/callback"
-)
-
-
 @debug_router.get("/debug/env", tags=["Debug"], include_in_schema=False)
 def debug_env_vars() -> Dict[str, Optional[str]]:
     """Endpoint temporal para depurar las variables de entorno OAuth de Meta.
@@ -53,7 +48,8 @@ def debug_env_vars() -> Dict[str, Optional[str]]:
         "META_REDIRECT_URI": meta_redirect_uri,
     }
 
-STATE_SESSION_KEY = "oauth_states"
+STATE_SESSION_KEY = "oauth_state"
+ORIGIN_SESSION_KEY = "oauth_origin"
 SUPPORTED_PROVIDERS = {"meta", "google", "tiktok", "linkedin", "google_ads"}
 SCOPE = (
     "openid https://www.googleapis.com/auth/userinfo.email "
@@ -112,9 +108,57 @@ def meta_login(request: Request, origin: str | None = None):
         ) from exc
 
 
+@router.get("/google/login", response_class=RedirectResponse)
+async def google_ads_login(request: Request):
+    app_origin = (
+        request.query_params.get("app_origin")
+        or request.query_params.get("origin")
+        or request.headers.get("origin")
+    )
+
+    if not app_origin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing app_origin in Google Ads login request",
+        )
+
+    state = token_urlsafe(32)
+    _store_state(request, state)
+    _store_origin(request, "google", app_origin)
+
+    client_id, _ = _require_credentials("google")
+    redirect_uri = _build_redirect_uri("google")
+
+    logger.info(
+        "[OAuth google] Preparing redirect | origin=%s | state=%s | redirect_uri=%s",
+        app_origin,
+        state,
+        redirect_uri,
+    )
+
+    auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": SCOPE,
+        "state": state,
+        "access_type": "offline",
+        "prompt": "consent",
+    }
+
+    return RedirectResponse(
+        url=f"{auth_url}?{urlencode(params)}",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
 @router.get("/{provider}/login", response_class=RedirectResponse)
 async def oauth_login(provider: str, request: Request):
     provider = _normalize_provider(provider)
+
+    if provider == "google":
+        return await google_ads_login(request)
 
     app_origin = (
         request.query_params.get("app_origin")
@@ -125,7 +169,7 @@ async def oauth_login(provider: str, request: Request):
     if not app_origin:
         raise HTTPException(
             status_code=400,
-            detail="Missing app_origin in Google login request"
+            detail="Missing app_origin in login request",
         )
 
     state = token_urlsafe(32)
@@ -136,7 +180,8 @@ async def oauth_login(provider: str, request: Request):
         dict(request.session),
     )
 
-    _store_state(request, provider, {"state": state, "app_origin": app_origin})
+    _store_state(request, state)
+    _store_origin(request, provider, app_origin)
 
     logger.info(
         "[OAuth %s] State generated: %s | Origin received: %s",
@@ -150,30 +195,57 @@ async def oauth_login(provider: str, request: Request):
         dict(request.session),
     )
 
-    if provider == "google":
-        client_id, _ = _require_credentials(provider)
-        redirect_uri = _build_redirect_uri(provider)
-        logger.info(
-            "[OAuth %s] Redirect URI used by backend: %s",
-            provider,
-            redirect_uri,
-        )
-        google_auth_url = (
-            "https://accounts.google.com/o/oauth2/v2/auth"
-            f"?client_id={client_id}"
-            f"&redirect_uri={redirect_uri}"
-            f"&response_type=code"
-            f"&scope={SCOPE}"
-            f"&state={state}"
-            "&access_type=offline"
-            "&prompt=consent"
-        )
-        return RedirectResponse(url=google_auth_url)
-
     authorization_url = _build_authorization_url(provider)
     url_with_state = f"{authorization_url}&state={state}"
 
     return RedirectResponse(url=url_with_state)
+
+
+@router.get("/google/callback", response_class=RedirectResponse)
+async def google_ads_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    if error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+
+    if not code or not state:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Missing code or state"
+        )
+
+    logger.info(
+        "[OAuth google] Callback received | state=%s | session=%s",
+        state,
+        dict(request.session),
+    )
+    _validate_state(state, request)
+
+    redirect_uri = _build_redirect_uri("google")
+    token_data = await _exchange_code_for_token("google", code, redirect_uri)
+    account_list = await _fetch_provider_accounts("google", token_data["access_token"])
+
+    _persist_token(db, user.id, "google", token_data)
+    _log_event(
+        db, user.id, "google", "connect_callback", {"accounts": len(account_list)}
+    )
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        logger.exception("Failed to persist OAuth callback information", exc_info=exc)
+        raise HTTPException(status_code=500, detail="Error storing OAuth information") from exc
+
+    app_origin = _load_origin(request, "google") or settings.backend_url
+    request.session.pop(STATE_SESSION_KEY, None)
+    request.session.pop(ORIGIN_SESSION_KEY, None)
+
+    return RedirectResponse(url=f"{app_origin}?connected=google", status_code=302)
 
 
 @router.get("/{provider}/callback", response_class=RedirectResponse)
@@ -187,6 +259,16 @@ async def oauth_callback(
     user=Depends(get_current_user),
 ):
     provider = _normalize_provider(provider)
+
+    if provider == "google":
+        return await google_ads_callback(
+            request=request,
+            code=code,
+            state=state,
+            error=error,
+            db=db,
+            user=user,
+        )
 
     if error:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
@@ -205,7 +287,8 @@ async def oauth_callback(
         state,
     )
 
-    app_origin = _validate_state(request, provider, state)
+    _validate_state(state, request)
+    app_origin = _load_origin(request, provider) or settings.backend_url
 
     redirect_uri = _build_redirect_uri(provider)
     token_data = await _exchange_code_for_token(provider, code, redirect_uri)
@@ -378,44 +461,51 @@ def _normalize_provider(provider: str) -> str:
     return normalized
 
 
-def _store_state(request: Request, provider: str, value: dict):
-    logger.info(
-        "[OAuth %s] Storing state %s | session before=%s",
-        provider,
-        value,
-        dict(request.session),
-    )
-    state_container = dict(request.session.get(STATE_SESSION_KEY, {}))
-    state_container[provider] = value
-    request.session[STATE_SESSION_KEY] = state_container
-    logger.info(
-        "[OAuth %s] State stored. Session after=%s",
-        provider,
-        dict(request.session),
-    )
+def _store_state(request: Request, state: str) -> None:
+    logger.info("[OAuth] Storing state=%s | session before=%s", state, dict(request.session))
+    request.session[STATE_SESSION_KEY] = state
+    logger.info("[OAuth] State stored. Session after=%s", dict(request.session))
 
 
-def _validate_state(request: Request, provider: str, state: str):
+def _load_state(request: Request) -> Optional[str]:
+    return request.session.get(STATE_SESSION_KEY)
+
+
+def _validate_state(received_state: str, request: Request) -> None:
+    stored_state = _load_state(request)
     logger.info(
-        "[OAuth %s] Validating state. Received=%s | session=%s",
-        provider,
-        state,
-        dict(request.session),
-    )
-    state_container = dict(request.session.get(STATE_SESSION_KEY, {}))
-    record = state_container.pop(provider, None)
-    request.session[STATE_SESSION_KEY] = state_container
-    logger.info(
-        "[OAuth %s] Stored state=%s | session after pop=%s",
-        provider,
-        record,
+        "[OAuth] Validating state. Received=%s | stored=%s | session=%s",
+        received_state,
+        stored_state,
         dict(request.session),
     )
 
-    if not record or record["state"] != state:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid state parameter")
+    if not stored_state or stored_state != received_state:
+        logger.error(
+            "[OAuth] Invalid OAuth state received | received=%s | stored=%s | session=%s",
+            received_state,
+            stored_state,
+            dict(request.session),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid OAuth state received",
+        )
 
-    return record["app_origin"]
+    request.session.pop(STATE_SESSION_KEY, None)
+
+
+def _store_origin(request: Request, provider: str, origin: str) -> None:
+    origin_container = dict(request.session.get(ORIGIN_SESSION_KEY, {}))
+    origin_container[provider] = origin
+    request.session[ORIGIN_SESSION_KEY] = origin_container
+
+
+def _load_origin(request: Request, provider: str) -> Optional[str]:
+    origin_container = dict(request.session.get(ORIGIN_SESSION_KEY, {}))
+    origin = origin_container.pop(provider, None)
+    request.session[ORIGIN_SESSION_KEY] = origin_container
+    return origin
 
 
 def _build_authorization_url(provider: str) -> str:
@@ -456,11 +546,8 @@ def _build_authorization_url(provider: str) -> str:
 
 def _build_redirect_uri(provider: str) -> str:
     if provider == "google":
-        redirect_uri = os.getenv("GOOGLE_ADS_REDIRECT_URI") or DEFAULT_GOOGLE_ADS_REDIRECT_URI
-        parsed_redirect = urllib.parse.urlparse(redirect_uri or "")
-        if not redirect_uri or (
-            parsed_redirect.hostname and parsed_redirect.hostname.lower() == "localhost"
-        ):
+        redirect_uri = os.getenv("GOOGLE_ADS_REDIRECT_URI")
+        if not redirect_uri:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="GOOGLE_ADS_REDIRECT_URI no configurado",
