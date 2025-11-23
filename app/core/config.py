@@ -27,6 +27,16 @@ class Settings:
         self.jwt_secret: Optional[str] = None
         self.secret_key: Optional[str] = None
         self.token_encryption_key: Optional[str] = None
+        self.session_cookie_name: str = os.getenv("SESSION_COOKIE_NAME", "mm_session")
+        self.session_cookie_domain: Optional[str] = os.getenv(
+            "SESSION_COOKIE_DOMAIN", ".azurewebsites.net"
+        )
+        self.session_cookie_samesite: str = os.getenv(
+            "SESSION_COOKIE_SAMESITE", "lax"
+        ).lower()
+        self.session_cookie_secure: bool = (
+            os.getenv("SESSION_COOKIE_SECURE", "true").lower() == "true"
+        )
 
         if self.vault_uri:
             credential = DefaultAzureCredential()
