@@ -126,6 +126,12 @@ async def oauth_login(provider: str, request: Request):
 
     state = token_urlsafe(32)
 
+    print(
+        ">>> SESSION_BEFORE =",
+        request.session,
+        flush=True,
+    )
+
     _store_state(request, provider, {"state": state, "app_origin": app_origin})
 
     print(
@@ -182,6 +188,12 @@ async def oauth_callback(
 
     if not code or not state:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing code or state")
+
+    print(
+        ">>> SESSION_AFTER =",
+        request.session,
+        flush=True,
+    )
 
     app_origin = _validate_state(request, provider, state)
 
@@ -411,14 +423,14 @@ def _build_authorization_url(provider: str) -> str:
 
 def _build_redirect_uri(provider: str) -> str:
     if provider == "google":
-        redirect_uri = os.getenv("GOOGLE_ADS_REDIRECT_URI")
+        redirect_uri = os.getenv("GOOGLE_REDIRECT_URI")
         parsed_redirect = urllib.parse.urlparse(redirect_uri or "")
         if not redirect_uri or (
             parsed_redirect.hostname and parsed_redirect.hostname.lower() == "localhost"
         ):
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="GOOGLE_ADS_REDIRECT_URI no configurado",
+                detail="GOOGLE_REDIRECT_URI no configurado",
             )
         return redirect_uri
 
