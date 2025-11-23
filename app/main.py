@@ -5,7 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth.routes import router as auth_router
-from app.core.config import settings
 from routers import accounts, ad_accounts, oauth
 
 app = FastAPI(title="MeetMyMetrics API")
@@ -26,16 +25,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-session_secret_key = os.getenv("SESSION_SECRET_KEY", settings.secret_key)
+session_secret_key = os.getenv("SESSION_SECRET_KEY")
+if not session_secret_key:
+    raise RuntimeError("SESSION_SECRET_KEY must be set for session management")
 
 app.add_middleware(
     SessionMiddleware,
     secret_key=session_secret_key,
-    session_cookie=settings.session_cookie_name,
-    same_site=settings.session_cookie_samesite,
-    https_only=settings.session_cookie_secure,
-    domain=settings.session_cookie_domain,
-    max_age=86400,
+    session_cookie="mymetrics_session",
+    same_site="lax",
+    https_only=True,
+    max_age=3600,
 )
 
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
