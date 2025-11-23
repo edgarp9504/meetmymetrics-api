@@ -31,6 +31,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["OAuth2 Providers"])
 debug_router = APIRouter()
 
+DEFAULT_GOOGLE_ADS_REDIRECT_URI = (
+    "https://meetmymetrics-api.azurewebsites.net/auth/google/callback"
+)
+
 
 @debug_router.get("/debug/env", tags=["Debug"], include_in_schema=False)
 def debug_env_vars() -> Dict[str, Optional[str]]:
@@ -126,32 +130,33 @@ async def oauth_login(provider: str, request: Request):
 
     state = token_urlsafe(32)
 
-    print(
-        ">>> SESSION_BEFORE =",
-        request.session,
-        flush=True,
+    logger.info(
+        "[OAuth %s] Session before storing state: %s",
+        provider,
+        dict(request.session),
     )
 
     _store_state(request, provider, {"state": state, "app_origin": app_origin})
 
-    print(
-        ">>> STATE_GENERADO =",
+    logger.info(
+        "[OAuth %s] State generated: %s | Origin received: %s",
+        provider,
         state,
-        flush=True,
-    )
-    print(
-        ">>> ORIGIN_RECIBIDO =",
         app_origin,
-        flush=True,
+    )
+    logger.info(
+        "[OAuth %s] Session after storing state: %s",
+        provider,
+        dict(request.session),
     )
 
     if provider == "google":
         client_id, _ = _require_credentials(provider)
         redirect_uri = _build_redirect_uri(provider)
-        print(
-            ">>> REDIRECT_URI_USADO_POR_BACKEND =",
+        logger.info(
+            "[OAuth %s] Redirect URI used by backend: %s",
+            provider,
             redirect_uri,
-            flush=True,
         )
         google_auth_url = (
             "https://accounts.google.com/o/oauth2/v2/auth"
@@ -189,10 +194,15 @@ async def oauth_callback(
     if not code or not state:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing code or state")
 
-    print(
-        ">>> SESSION_AFTER =",
-        request.session,
-        flush=True,
+    logger.info(
+        "[OAuth %s] Callback session snapshot: %s",
+        provider,
+        dict(request.session),
+    )
+    logger.info(
+        "[OAuth %s] Callback received state: %s",
+        provider,
+        state,
     )
 
     app_origin = _validate_state(request, provider, state)
@@ -369,15 +379,38 @@ def _normalize_provider(provider: str) -> str:
 
 
 def _store_state(request: Request, provider: str, value: dict):
-    state_container = request.session.get(STATE_SESSION_KEY, {})
+    logger.info(
+        "[OAuth %s] Storing state %s | session before=%s",
+        provider,
+        value,
+        dict(request.session),
+    )
+    state_container = dict(request.session.get(STATE_SESSION_KEY, {}))
     state_container[provider] = value
     request.session[STATE_SESSION_KEY] = state_container
+    logger.info(
+        "[OAuth %s] State stored. Session after=%s",
+        provider,
+        dict(request.session),
+    )
 
 
 def _validate_state(request: Request, provider: str, state: str):
-    state_container = request.session.get(STATE_SESSION_KEY, {})
+    logger.info(
+        "[OAuth %s] Validating state. Received=%s | session=%s",
+        provider,
+        state,
+        dict(request.session),
+    )
+    state_container = dict(request.session.get(STATE_SESSION_KEY, {}))
     record = state_container.pop(provider, None)
     request.session[STATE_SESSION_KEY] = state_container
+    logger.info(
+        "[OAuth %s] Stored state=%s | session after pop=%s",
+        provider,
+        record,
+        dict(request.session),
+    )
 
     if not record or record["state"] != state:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid state parameter")
@@ -423,7 +456,7 @@ def _build_authorization_url(provider: str) -> str:
 
 def _build_redirect_uri(provider: str) -> str:
     if provider == "google":
-        redirect_uri = os.getenv("GOOGLE_ADS_REDIRECT_URI")
+        redirect_uri = os.getenv("GOOGLE_ADS_REDIRECT_URI") or DEFAULT_GOOGLE_ADS_REDIRECT_URI
         parsed_redirect = urllib.parse.urlparse(redirect_uri or "")
         if not redirect_uri or (
             parsed_redirect.hostname and parsed_redirect.hostname.lower() == "localhost"
