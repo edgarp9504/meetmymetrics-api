@@ -4,7 +4,6 @@ from typing import Optional
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
 
-
 class Settings:
     def __init__(self):
         self.environment = os.getenv("ENV", "dev")
