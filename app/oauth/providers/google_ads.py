@@ -37,7 +37,9 @@ class GoogleAdsProvider(OAuthProvider):
         }
 
         auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{httpx.QueryParams(params)}"
-        print("🔥 GOOGLE auth_url =", auth_url)
+        logger.info("[GoogleAds] redirect_uri=%r", redirect_uri)
+        logger.info("[GoogleAds] auth_url=%s", auth_url)
+
 
         return auth_url
 
