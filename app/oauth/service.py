@@ -86,7 +86,11 @@ def initiate_login_flow(request: Request, provider: str) -> RedirectResponse:
     store_state(request, normalized_provider, state)
     store_origin(request, normalized_provider, origin)
 
-    authorization_url = _get_provider(normalized_provider).build_authorization_url(state)
+    if normalized_provider == "google":
+        authorization_url = GoogleAdsProvider().build_authorization_url(state)
+    else:
+        authorization_url = _get_provider(normalized_provider).build_authorization_url(state)
+
     return RedirectResponse(url=authorization_url, status_code=status.HTTP_302_FOUND)
 
 
