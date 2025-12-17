@@ -110,96 +110,12 @@ def meta_login(request: Request, origin: str | None = None):
 
 @router.get("/google/login", response_class=RedirectResponse)
 async def google_ads_login(request: Request):
-    provider = "google"
-    app_origin = (
-        request.query_params.get("app_origin")
-        or request.query_params.get("origin")
-        or request.headers.get("origin")
-    )
-
-    if not app_origin:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing app_origin in Google Ads login request",
-        )
-
-    state = token_urlsafe(32)
-    _store_state(request, provider, state)
-    _store_origin(request, provider, app_origin)
-
-    client_id, _ = _require_credentials(provider)
-    redirect_uri = _build_redirect_uri(provider)
-
-    logger.info(
-        "[OAuth google] Preparing redirect | origin=%s | state=%s | redirect_uri=%s",
-        app_origin,
-        state,
-        redirect_uri,
-    )
-
-    auth_url = "https://accounts.google.com/o/oauth2/v2/auth"
-    params = {
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "response_type": "code",
-        "scope": SCOPE,
-        "state": state,
-        "access_type": "offline",
-        "prompt": "consent",
-    }
-
-    return RedirectResponse(
-        url=f"{auth_url}?{urlencode(params)}",
-        status_code=status.HTTP_302_FOUND,
-    )
+    return await _initiate_login_flow(request, provider="google")
 
 
 @router.get("/{provider}/login", response_class=RedirectResponse)
 async def oauth_login(provider: str, request: Request):
-    provider = _normalize_provider(provider)
-
-    if provider == "google":
-        return await google_ads_login(request)
-
-    app_origin = (
-        request.query_params.get("app_origin")
-        or request.query_params.get("origin")
-        or request.headers.get("origin")
-    )
-
-    if not app_origin:
-        raise HTTPException(
-            status_code=400,
-            detail="Missing app_origin in login request",
-        )
-
-    state = token_urlsafe(32)
-
-    logger.info(
-        "[OAuth %s] Session before storing state: %s",
-        provider,
-        dict(request.session),
-    )
-
-    _store_state(request, provider, state)
-    _store_origin(request, provider, app_origin)
-
-    logger.info(
-        "[OAuth %s] State generated: %s | Origin received: %s",
-        provider,
-        state,
-        app_origin,
-    )
-    logger.info(
-        "[OAuth %s] Session after storing state: %s",
-        provider,
-        dict(request.session),
-    )
-
-    authorization_url = _build_authorization_url(provider)
-    url_with_state = f"{authorization_url}&state={state}"
-
-    return RedirectResponse(url=url_with_state)
+    return await _initiate_login_flow(request, provider=_normalize_provider(provider))
 
 
 @router.get("/google/callback", response_class=RedirectResponse)
@@ -224,7 +140,7 @@ async def google_ads_callback(
         state,
         dict(request.session),
     )
-    _validate_state(state, request, "google")
+    _validate_oauth_state(request, "google", state)
 
     redirect_uri = _build_redirect_uri("google")
     token_data = await _exchange_code_for_token("google", code, redirect_uri)
@@ -243,7 +159,6 @@ async def google_ads_callback(
         raise HTTPException(status_code=500, detail="Error storing OAuth information") from exc
 
     app_origin = _load_origin(request, "google") or settings.backend_url
-    request.session.pop(ORIGIN_SESSION_KEY, None)
 
     return RedirectResponse(url=f"{app_origin}?connected=google", status_code=302)
 
@@ -287,7 +202,7 @@ async def oauth_callback(
         state,
     )
 
-    _validate_state(state, request, provider)
+    _validate_oauth_state(request, provider, state)
     app_origin = _load_origin(request, provider) or settings.backend_url
 
     redirect_uri = _build_redirect_uri(provider)
@@ -461,6 +376,48 @@ def _normalize_provider(provider: str) -> str:
     return normalized
 
 
+async def _initiate_login_flow(request: Request, provider: str) -> RedirectResponse:
+    normalized_provider = _normalize_provider(provider)
+    app_origin = (
+        request.query_params.get("app_origin")
+        or request.query_params.get("origin")
+        or request.headers.get("origin")
+    )
+
+    if not app_origin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing app_origin in login request",
+        )
+
+    state = token_urlsafe(32)
+
+    logger.info(
+        "[OAuth %s] Session before storing state: %s",
+        normalized_provider,
+        dict(request.session),
+    )
+
+    _store_state(request, normalized_provider, state)
+    _store_origin(request, normalized_provider, app_origin)
+
+    logger.info(
+        "[OAuth %s] State generated: %s | Origin received: %s",
+        normalized_provider,
+        state,
+        app_origin,
+    )
+    logger.info(
+        "[OAuth %s] Session after storing state: %s",
+        normalized_provider,
+        dict(request.session),
+    )
+
+    authorization_url = _build_authorization_url(normalized_provider, state)
+
+    return RedirectResponse(url=authorization_url, status_code=status.HTTP_302_FOUND)
+
+
 def _store_state(request: Request, provider: str, state: str) -> None:
     logger.info(
         "[OAuth] Storing state=%s for provider=%s | session before=%s",
@@ -479,21 +436,21 @@ def _load_state(request: Request, provider: str) -> Optional[str]:
     return state_container.get(provider)
 
 
-def _validate_state(received_state: str, request: Request, provider: str) -> None:
-    stored_state = _load_state(request, provider)
+def _validate_oauth_state(request: Request, provider: str, incoming_state: str) -> None:
+    expected_state = _load_state(request, provider)
     logger.info(
         "[OAuth] Validating state. Received=%s | stored=%s | provider=%s | session=%s",
-        received_state,
-        stored_state,
+        incoming_state,
+        expected_state,
         provider,
         dict(request.session),
     )
 
-    if not stored_state or stored_state != received_state:
+    if not expected_state or expected_state != incoming_state:
         logger.error(
             "[OAuth] Invalid OAuth state received | received=%s | stored=%s | provider=%s | session=%s",
-            received_state,
-            stored_state,
+            incoming_state,
+            expected_state,
             provider,
             dict(request.session),
         )
@@ -519,11 +476,14 @@ def _store_origin(request: Request, provider: str, origin: str) -> None:
 def _load_origin(request: Request, provider: str) -> Optional[str]:
     origin_container = dict(request.session.get(ORIGIN_SESSION_KEY, {}))
     origin = origin_container.pop(provider, None)
-    request.session[ORIGIN_SESSION_KEY] = origin_container
+    if origin_container:
+        request.session[ORIGIN_SESSION_KEY] = origin_container
+    else:
+        request.session.pop(ORIGIN_SESSION_KEY, None)
     return origin
 
 
-def _build_authorization_url(provider: str) -> str:
+def _build_authorization_url(provider: str, state: str) -> str:
     redirect_uri = _build_redirect_uri(provider)
 
     if provider == "meta":
@@ -533,6 +493,7 @@ def _build_authorization_url(provider: str) -> str:
             "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": "ads_read,read_insights,pages_show_list",
+            "state": state,
         }
         return f"https://www.facebook.com/v20.0/dialog/oauth?{urlencode(params)}"
 
@@ -543,6 +504,7 @@ def _build_authorization_url(provider: str) -> str:
             "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": "user.info.basic,advertiser.info",
+            "state": state,
         }
         return f"https://business-api.tiktok.com/open_api/v1.3/oauth2/authorize?{urlencode(params)}"
 
@@ -553,8 +515,22 @@ def _build_authorization_url(provider: str) -> str:
             "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": "r_ads r_ads_reporting",
+            "state": state,
         }
         return f"https://www.linkedin.com/oauth/v2/authorization?{urlencode(params)}"
+
+    if provider == "google":
+        client_id, _ = _require_credentials(provider)
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": SCOPE,
+            "state": state,
+            "access_type": "offline",
+            "prompt": "consent",
+        }
+        return f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
 
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Proveedor no soportado")
 
