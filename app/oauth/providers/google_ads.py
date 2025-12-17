@@ -22,19 +22,12 @@ class GoogleAdsProvider(OAuthProvider):
     name = "google"
 
     def build_authorization_url(self, state: str) -> str:
-        client_id = settings.google_ads_client_id
-        if not client_id:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Credenciales OAuth no configuradas para google",
-            )
-
         redirect_uri = self.build_redirect_uri()
-        logger.info(
-            "[GoogleAds] Using redirect_uri for authorization: %r", redirect_uri
-        )
+
+        print("🔥 GOOGLE redirect_uri =", repr(redirect_uri))
+
         params = {
-            "client_id": client_id,
+            "client_id": settings.google_ads_client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": GOOGLE_SCOPE,
@@ -42,11 +35,12 @@ class GoogleAdsProvider(OAuthProvider):
             "access_type": "offline",
             "prompt": "consent",
         }
-        auth_url = (
-            f"https://accounts.google.com/o/oauth2/v2/auth?{httpx.QueryParams(params)}"
-        )
-        logger.info("[GoogleAds] Generated authorization URL: %r", auth_url)
+
+        auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{httpx.QueryParams(params)}"
+        print("🔥 GOOGLE auth_url =", auth_url)
+
         return auth_url
+
 
     def build_redirect_uri(self) -> str:
         # Google Ads requiere que redirect_uri sea un valor estático y exacto.
