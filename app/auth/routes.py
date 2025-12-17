@@ -24,6 +24,7 @@ from app.core.security_keys import ALGORITHM, SECRET_KEY
 from app.core.security import create_access_token
 from app.db.connection import get_connection
 from app.db.migrations import ensure_account_schema
+from app.oauth.session_store import store_state
 from app.utils.hashing import get_password_hash, verify_password
 from app.utils.validation import (
     is_suspicious_email,
@@ -31,7 +32,6 @@ from app.utils.validation import (
     validate_password_strength,
 )
 from app.utils.email import send_verification_email
-from routers.oauth import _build_redirect_uri, _require_credentials, _store_state
 
 
 def resend_verification_code(conn, email: str) -> str:
@@ -116,6 +116,22 @@ def _validate_app_origin(app_origin: Optional[str]) -> str:
 
     origin = f"{parsed.scheme}://{parsed.netloc}"
     return origin
+
+
+def _build_google_redirect_uri() -> str:
+    return f"{settings.backend_url.rstrip('/')}/auth/google/callback"
+
+
+def _require_google_credentials() -> tuple[str, str]:
+    client_id = settings.google_client_id
+    client_secret = settings.google_client_secret
+
+    if not client_id or not client_secret:
+        raise HTTPException(
+            status_code=400, detail="Google authentication failed"
+        )
+
+    return client_id, client_secret
 
 
 @router.post("/register")
@@ -630,8 +646,8 @@ async def google_login(request: Request):
         )
 
     provider = "google"
-    redirect_uri = _build_redirect_uri(provider)
-    client_id, _ = _require_credentials(provider)
+    redirect_uri = _build_google_redirect_uri()
+    client_id, _ = _require_google_credentials()
 
     params = {
         "client_id": client_id,
@@ -648,7 +664,7 @@ async def google_login(request: Request):
         "state": token_urlsafe(32),
     }
 
-    _store_state(request, provider, params["state"])
+    store_state(request, provider, params["state"])
     request.session["app_origin"] = app_origin
 
     auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
