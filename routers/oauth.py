@@ -48,7 +48,7 @@ def debug_env_vars() -> Dict[str, Optional[str]]:
         "META_REDIRECT_URI": meta_redirect_uri,
     }
 
-STATE_SESSION_KEY = "oauth_state"
+STATE_SESSION_KEY = "oauth_state_by_provider"
 ORIGIN_SESSION_KEY = "oauth_origin"
 SUPPORTED_PROVIDERS = {"meta", "google", "tiktok", "linkedin", "google_ads"}
 SCOPE = (
@@ -110,6 +110,7 @@ def meta_login(request: Request, origin: str | None = None):
 
 @router.get("/google/login", response_class=RedirectResponse)
 async def google_ads_login(request: Request):
+    provider = "google"
     app_origin = (
         request.query_params.get("app_origin")
         or request.query_params.get("origin")
@@ -123,11 +124,11 @@ async def google_ads_login(request: Request):
         )
 
     state = token_urlsafe(32)
-    _store_state(request, state)
-    _store_origin(request, "google", app_origin)
+    _store_state(request, provider, state)
+    _store_origin(request, provider, app_origin)
 
-    client_id, _ = _require_credentials("google")
-    redirect_uri = _build_redirect_uri("google")
+    client_id, _ = _require_credentials(provider)
+    redirect_uri = _build_redirect_uri(provider)
 
     logger.info(
         "[OAuth google] Preparing redirect | origin=%s | state=%s | redirect_uri=%s",
@@ -180,7 +181,7 @@ async def oauth_login(provider: str, request: Request):
         dict(request.session),
     )
 
-    _store_state(request, state)
+    _store_state(request, provider, state)
     _store_origin(request, provider, app_origin)
 
     logger.info(
@@ -223,7 +224,7 @@ async def google_ads_callback(
         state,
         dict(request.session),
     )
-    _validate_state(state, request)
+    _validate_state(state, request, "google")
 
     redirect_uri = _build_redirect_uri("google")
     token_data = await _exchange_code_for_token("google", code, redirect_uri)
@@ -242,7 +243,6 @@ async def google_ads_callback(
         raise HTTPException(status_code=500, detail="Error storing OAuth information") from exc
 
     app_origin = _load_origin(request, "google") or settings.backend_url
-    request.session.pop(STATE_SESSION_KEY, None)
     request.session.pop(ORIGIN_SESSION_KEY, None)
 
     return RedirectResponse(url=f"{app_origin}?connected=google", status_code=302)
@@ -287,7 +287,7 @@ async def oauth_callback(
         state,
     )
 
-    _validate_state(state, request)
+    _validate_state(state, request, provider)
     app_origin = _load_origin(request, provider) or settings.backend_url
 
     redirect_uri = _build_redirect_uri(provider)
@@ -461,30 +461,40 @@ def _normalize_provider(provider: str) -> str:
     return normalized
 
 
-def _store_state(request: Request, state: str) -> None:
-    logger.info("[OAuth] Storing state=%s | session before=%s", state, dict(request.session))
-    request.session[STATE_SESSION_KEY] = state
+def _store_state(request: Request, provider: str, state: str) -> None:
+    logger.info(
+        "[OAuth] Storing state=%s for provider=%s | session before=%s",
+        state,
+        provider,
+        dict(request.session),
+    )
+    state_container = dict(request.session.get(STATE_SESSION_KEY, {}))
+    state_container[provider] = state
+    request.session[STATE_SESSION_KEY] = state_container
     logger.info("[OAuth] State stored. Session after=%s", dict(request.session))
 
 
-def _load_state(request: Request) -> Optional[str]:
-    return request.session.get(STATE_SESSION_KEY)
+def _load_state(request: Request, provider: str) -> Optional[str]:
+    state_container = dict(request.session.get(STATE_SESSION_KEY, {}))
+    return state_container.get(provider)
 
 
-def _validate_state(received_state: str, request: Request) -> None:
-    stored_state = _load_state(request)
+def _validate_state(received_state: str, request: Request, provider: str) -> None:
+    stored_state = _load_state(request, provider)
     logger.info(
-        "[OAuth] Validating state. Received=%s | stored=%s | session=%s",
+        "[OAuth] Validating state. Received=%s | stored=%s | provider=%s | session=%s",
         received_state,
         stored_state,
+        provider,
         dict(request.session),
     )
 
     if not stored_state or stored_state != received_state:
         logger.error(
-            "[OAuth] Invalid OAuth state received | received=%s | stored=%s | session=%s",
+            "[OAuth] Invalid OAuth state received | received=%s | stored=%s | provider=%s | session=%s",
             received_state,
             stored_state,
+            provider,
             dict(request.session),
         )
         raise HTTPException(
@@ -492,7 +502,12 @@ def _validate_state(received_state: str, request: Request) -> None:
             detail="Invalid OAuth state received",
         )
 
-    request.session.pop(STATE_SESSION_KEY, None)
+    state_container = dict(request.session.get(STATE_SESSION_KEY, {}))
+    state_container.pop(provider, None)
+    if state_container:
+        request.session[STATE_SESSION_KEY] = state_container
+    else:
+        request.session.pop(STATE_SESSION_KEY, None)
 
 
 def _store_origin(request: Request, provider: str, origin: str) -> None:
