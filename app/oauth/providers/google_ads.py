@@ -30,7 +30,9 @@ class GoogleAdsProvider(OAuthProvider):
             )
 
         redirect_uri = self.build_redirect_uri()
-        logger.info("[GoogleAds] Using redirect_uri for authorization: %s", redirect_uri)
+        logger.info(
+            "[GoogleAds] Using redirect_uri for authorization: %r", redirect_uri
+        )
         params = {
             "client_id": client_id,
             "redirect_uri": redirect_uri,
@@ -40,7 +42,11 @@ class GoogleAdsProvider(OAuthProvider):
             "access_type": "offline",
             "prompt": "consent",
         }
-        return f"https://accounts.google.com/o/oauth2/v2/auth?{httpx.QueryParams(params)}"
+        auth_url = (
+            f"https://accounts.google.com/o/oauth2/v2/auth?{httpx.QueryParams(params)}"
+        )
+        logger.info("[GoogleAds] Generated authorization URL: %r", auth_url)
+        return auth_url
 
     def build_redirect_uri(self) -> str:
         # Google Ads requiere que redirect_uri sea un valor estático y exacto.
@@ -49,9 +55,46 @@ class GoogleAdsProvider(OAuthProvider):
         if not redirect_uri:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="GOOGLE_ADS_REDIRECT_URI no configurado",
+                detail="GOOGLE_ADS_REDIRECT_URI no configurado en App Service",
             )
-        return redirect_uri
+
+        return self._validate_redirect_uri(redirect_uri)
+
+    def _validate_redirect_uri(self, redirect_uri: str) -> str:
+        normalized = redirect_uri.strip()
+        lower_value = normalized.lower()
+
+        if "%2f" in lower_value or "%3a" in lower_value:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    "GOOGLE_ADS_REDIRECT_URI parece venir URL-encoded, "
+                    "debe ser una URL normal"
+                ),
+            )
+
+        if normalized.endswith("/"):
+            normalized = normalized.rstrip("/")
+            logger.info(
+                "[GoogleAds] Normalized redirect_uri without trailing slash: %r",
+                normalized,
+            )
+
+        if settings.environment.lower() not in {"dev", "development", "local"} and not normalized.startswith(
+            "https://"
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="GOOGLE_ADS_REDIRECT_URI debe comenzar con https:// en producción",
+            )
+
+        if "/auth/google/callback" not in normalized:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="GOOGLE_ADS_REDIRECT_URI debe incluir el path /auth/google/callback",
+            )
+
+        return normalized
 
     async def exchange_code_for_token(
         self, code: str, redirect_uri: str, client: httpx.AsyncClient
@@ -67,10 +110,12 @@ class GoogleAdsProvider(OAuthProvider):
         enforced_redirect_uri = self.build_redirect_uri()
         if redirect_uri != enforced_redirect_uri:
             logger.warning(
-                "[GoogleAds] Overriding provided redirect_uri with static value: %s",
+                "[GoogleAds] Overriding provided redirect_uri with static value: %r",
                 enforced_redirect_uri,
             )
-        logger.info("[GoogleAds] Using redirect_uri for token exchange: %s", enforced_redirect_uri)
+        logger.info(
+            "[GoogleAds] Using redirect_uri for token exchange: %r", enforced_redirect_uri
+        )
 
         response = await client.post(
             "https://oauth2.googleapis.com/token",
