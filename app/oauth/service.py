@@ -120,6 +120,7 @@ async def handle_callback(
     validate_state(request, normalized_provider, state)
     app_origin = load_origin(request, normalized_provider) or settings.backend_url
     provider_impl = _get_provider(normalized_provider)
+    # Delegate redirect_uri handling entirely to the provider to avoid overrides.
     redirect_uri = provider_impl.build_redirect_uri()
 
     async with _build_client() as client:

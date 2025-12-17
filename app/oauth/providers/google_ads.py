@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any, Dict, List
 
@@ -8,6 +9,8 @@ from fastapi import HTTPException, status
 
 from app.core.config import settings
 from app.oauth.providers.base import OAuthProvider, validate_oauth_response
+
+logger = logging.getLogger(__name__)
 
 GOOGLE_SCOPE = (
     "openid https://www.googleapis.com/auth/userinfo.email "
@@ -27,6 +30,7 @@ class GoogleAdsProvider(OAuthProvider):
             )
 
         redirect_uri = self.build_redirect_uri()
+        logger.info("[GoogleAds] Using redirect_uri for authorization: %s", redirect_uri)
         params = {
             "client_id": client_id,
             "redirect_uri": redirect_uri,
@@ -39,6 +43,8 @@ class GoogleAdsProvider(OAuthProvider):
         return f"https://accounts.google.com/o/oauth2/v2/auth?{httpx.QueryParams(params)}"
 
     def build_redirect_uri(self) -> str:
+        # Google Ads requiere que redirect_uri sea un valor estático y exacto.
+        # No debe reconstruirse dinámicamente ni derivarse de backend_url.
         redirect_uri = os.getenv("GOOGLE_ADS_REDIRECT_URI")
         if not redirect_uri:
             raise HTTPException(
@@ -58,6 +64,14 @@ class GoogleAdsProvider(OAuthProvider):
                 detail="Credenciales OAuth no configuradas para google",
             )
 
+        enforced_redirect_uri = self.build_redirect_uri()
+        if redirect_uri != enforced_redirect_uri:
+            logger.warning(
+                "[GoogleAds] Overriding provided redirect_uri with static value: %s",
+                enforced_redirect_uri,
+            )
+        logger.info("[GoogleAds] Using redirect_uri for token exchange: %s", enforced_redirect_uri)
+
         response = await client.post(
             "https://oauth2.googleapis.com/token",
             data={
@@ -65,7 +79,7 @@ class GoogleAdsProvider(OAuthProvider):
                 "client_secret": client_secret,
                 "code": code,
                 "grant_type": "authorization_code",
-                "redirect_uri": redirect_uri,
+                "redirect_uri": enforced_redirect_uri,
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
