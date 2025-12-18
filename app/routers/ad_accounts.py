@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status # pyright: ignore[reportMissingImports]
 from sqlalchemy import and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from database import get_db
-from dependencies import get_current_user
+from app.db.session import get_db
+from app.auth.dependencies import get_current_user
 from models import AdAccount, UserAdAccount
 from schemas import AdAccountCreate, AdAccountOut
 

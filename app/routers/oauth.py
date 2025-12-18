@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, Request # pyright: ignore[reportMissingImports]
+from fastapi.responses import RedirectResponse # pyright: ignore[reportMissingImports]
 from sqlalchemy.orm import Session
 
 from app.oauth.session_store import ORIGIN_SESSION_KEY, STATE_SESSION_KEY
@@ -12,8 +12,8 @@ from app.oauth.service import (
     initiate_login_flow,
     normalize_provider,
 )
-from database import get_db
-from dependencies import get_current_user
+from app.db.session import get_db
+from app.auth.dependencies import get_current_user
 from schemas import OAuthConnectRequest, OAuthDisconnectRequest
 
 router = APIRouter(prefix="/auth", tags=["OAuth2 Providers"])

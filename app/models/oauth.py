@@ -12,7 +12,7 @@ from sqlalchemy import (
     JSON,
 )
 
-from database import Base
+from app.db.session import Base
 
 
 class OAuthToken(Base):

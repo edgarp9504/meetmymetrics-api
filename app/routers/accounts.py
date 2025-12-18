@@ -4,10 +4,10 @@ from datetime import datetime, timedelta, timezone
 from secrets import token_urlsafe
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status # pyright: ignore[reportMissingImports]
 from pydantic import BaseModel, EmailStr, Field
 
-from dependencies import get_current_user
+from app.auth.dependencies import get_current_user
 from app.db.audit import log_action, safe_log_action
 from app.db.connection import get_connection
 from app.db.migrations import ensure_account_schema
