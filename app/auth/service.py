@@ -8,9 +8,8 @@ from typing import Deque, Dict, Optional
 from urllib.parse import urlencode, urlparse
 
 import jwt
-from jwt import InvalidTokenError
 from authlib.integrations.starlette_client import OAuth, OAuthError
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from app.auth.schemas import (
@@ -20,42 +19,19 @@ from app.auth.schemas import (
     VerifyCodeRequest,
 )
 from app.core.config import settings
-from app.core.security_keys import ALGORITHM, SECRET_KEY
 from app.core.security import create_access_token
+from app.core.security_keys import ALGORITHM, SECRET_KEY
 from app.db.connection import get_connection
 from app.db.migrations import ensure_account_schema
 from app.oauth.session_store import store_state
+from app.utils.email import send_verification_email
 from app.utils.hashing import get_password_hash, verify_password
 from app.utils.validation import (
     is_suspicious_email,
     validate_email_address,
     validate_password_strength,
 )
-from app.utils.email import send_verification_email
 
-
-def resend_verification_code(conn, email: str) -> str:
-    code = f"{random.randint(100000, 999999)}"
-    expiry = datetime.utcnow() + timedelta(minutes=15)
-
-    with conn.cursor() as cur:
-        cur.execute("SELECT first_name FROM users WHERE email = %s", (email,))
-        row = cur.fetchone()
-        first_name = row[0] if row and row[0] else ""
-        cur.execute(
-            """
-            UPDATE users
-            SET verification_code = %s, verification_expiry = %s
-            WHERE email = %s
-            """,
-            (code, expiry, email),
-        )
-
-    conn.commit()
-    send_verification_email(email, first_name, code)
-    return code
-
-router = APIRouter()
 logger = logging.getLogger(__name__)
 
 RATE_LIMIT_WINDOW_SECONDS = 60
@@ -75,7 +51,7 @@ if GOOGLE_OAUTH_ENABLED:
         server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
         client_kwargs={"scope": "openid email profile"},
     )
-else:
+else:  # pragma: no cover - configuration-dependent
     logger.error("Google OAuth credentials are not configured")
 
 
@@ -134,20 +110,16 @@ def _require_google_credentials() -> tuple[str, str]:
     return client_id, client_secret
 
 
-@router.post("/register")
-def register(user: UserRegister, request: Request):
-    conn = None
-    cur = None
-
-    verification_code = f"{random.randint(100000, 999999)}"
-    verification_expiry = datetime.utcnow() + timedelta(minutes=15)
-
-    client_ip = "unknown"
+def _extract_client_ip(request: Request) -> str:
     if request and request.client and request.client.host:
-        client_ip = request.client.host
+        return request.client.host
+    return "unknown"
 
+
+def _enforce_registration_rate_limit(client_ip: str) -> Optional[JSONResponse]:
     now = datetime.utcnow()
     attempts = _registration_attempts[client_ip]
+
     while attempts and (now - attempts[0]).total_seconds() > RATE_LIMIT_WINDOW_SECONDS:
         attempts.popleft()
 
@@ -159,6 +131,42 @@ def register(user: UserRegister, request: Request):
         )
 
     attempts.append(now)
+    return None
+
+
+def resend_verification_code(conn, email: str) -> str:
+    code = f"{random.randint(100000, 999999)}"
+    expiry = datetime.utcnow() + timedelta(minutes=15)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT first_name FROM users WHERE email = %s", (email,))
+        row = cur.fetchone()
+        first_name = row[0] if row and row[0] else ""
+        cur.execute(
+            """
+            UPDATE users
+            SET verification_code = %s, verification_expiry = %s
+            WHERE email = %s
+            """,
+            (code, expiry, email),
+        )
+
+    conn.commit()
+    send_verification_email(email, first_name, code)
+    return code
+
+
+def register_user(user: UserRegister, request: Request) -> JSONResponse:
+    conn = None
+    cur = None
+
+    verification_code = f"{random.randint(100000, 999999)}"
+    verification_expiry = datetime.utcnow() + timedelta(minutes=15)
+
+    client_ip = _extract_client_ip(request)
+    rate_limit_response = _enforce_registration_rate_limit(client_ip)
+    if rate_limit_response:
+        return rate_limit_response
 
     try:
         normalized_email = validate_email_address(user.email)
@@ -324,7 +332,6 @@ def register(user: UserRegister, request: Request):
                 linked_via_invitation = False
 
         if not linked_via_invitation:
-            # Verificar si el usuario ya pertenece a una cuenta existente (como owner o invitado)
             cur.execute(
                 """
                 SELECT am.account_id, am.role
@@ -377,7 +384,7 @@ def register(user: UserRegister, request: Request):
                 "requires_verification": True,
             },
         )
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover - defensive logging
         logger.exception("Unexpected error during registration: %s", exc)
         if conn:
             conn.rollback()
@@ -389,10 +396,7 @@ def register(user: UserRegister, request: Request):
             conn.close()
 
 
-@router.post("/verify")
-@router.post("/verify-email")
-@router.post("/verify_email")
-def verify_email(payload: VerifyCodeRequest):
+def verify_email(payload: VerifyCodeRequest) -> JSONResponse:
     conn = None
     cur = None
 
@@ -446,7 +450,7 @@ def verify_email(payload: VerifyCodeRequest):
             status_code=200,
             content={"message": "Account verified successfully"},
         )
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover - defensive logging
         logger.exception("Unexpected error during email verification: %s", exc)
         if conn:
             conn.rollback()
@@ -458,8 +462,7 @@ def verify_email(payload: VerifyCodeRequest):
             conn.close()
 
 
-@router.post("/login")
-def login(user: UserLogin):
+def login(user: UserLogin) -> JSONResponse:
     conn = None
     cur = None
 
@@ -547,7 +550,7 @@ def login(user: UserLogin):
                 },
             },
         )
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover - defensive logging
         logger.exception("Unexpected error during login: %s", exc)
         return JSONResponse(
             status_code=500,
@@ -561,10 +564,9 @@ def login(user: UserLogin):
             conn.close()
 
 
-@router.put("/update-password")
 def update_password(
-    payload: UpdatePasswordRequest, authorization: str = Header(default=None)
-):
+    payload: UpdatePasswordRequest, authorization: Optional[str] = None
+) -> JSONResponse:
     if not authorization or not authorization.startswith("Bearer "):
         return JSONResponse(status_code=401, content={"error": "Not authenticated"})
 
@@ -576,7 +578,7 @@ def update_password(
             raise ValueError("Missing user_id in token")
     except jwt.ExpiredSignatureError:
         return JSONResponse(status_code=401, content={"error": "Token expired"})
-    except (InvalidTokenError, ValueError):
+    except (jwt.InvalidTokenError, ValueError):
         return JSONResponse(status_code=401, content={"error": "Invalid token"})
 
     if payload.new_password != payload.confirm_password:
@@ -609,7 +611,7 @@ def update_password(
         conn.commit()
 
         return JSONResponse(status_code=200, content={"message": "Password updated"})
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover - defensive logging
         logger.exception("Unexpected error during password update: %s", exc)
         if conn:
             conn.rollback()
@@ -620,8 +622,8 @@ def update_password(
         if conn:
             conn.close()
 
-@router.get("/google/login", response_class=RedirectResponse)
-async def google_login(request: Request):
+
+async def google_login(request: Request) -> RedirectResponse:
     """
     Flujo OAuth de Google — versión robusta.
     Acepta tanto `app_origin` como `origin` para evitar errores.
@@ -671,7 +673,6 @@ async def google_login(request: Request):
     return RedirectResponse(url=auth_url, status_code=302)
 
 
-@router.get("/google/callback")
 async def google_callback(request: Request):
     conn = None
     cur = None
@@ -818,7 +819,7 @@ async def google_callback(request: Request):
             app_origin,
         )
         return HTMLResponse(status_code=400, content=error_html)
-    except Exception as exc:  # pragma: no cover
+    except Exception as exc:  # pragma: no cover - defensive logging
         logger.exception("Unexpected error during Google callback: %s", exc)
         if conn:
             conn.rollback()
@@ -836,5 +837,3 @@ async def google_callback(request: Request):
             cur.close()
         if conn:
             conn.close()
-
-
