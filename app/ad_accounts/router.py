@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.auth.dependencies import get_current_user
-from app.models.ad_accounts import AdAccount, UserAdAccount
+from app.models import AdAccount, UserAdAccount
 from schemas import AdAccountCreate, AdAccountOut
 
 router = APIRouter(prefix="/ad_accounts", tags=["Ad Accounts"])
