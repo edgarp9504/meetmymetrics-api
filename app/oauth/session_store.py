@@ -1,7 +1,7 @@
 import logging
 from typing import Optional
 
-from fastapi import HTTPException, Request, status
+from fastapi import HTTPException, Request, status # pyright: ignore[reportMissingImports]
 
 STATE_SESSION_KEY = "oauth_state_by_provider"
 ORIGIN_SESSION_KEY = "oauth_origin"

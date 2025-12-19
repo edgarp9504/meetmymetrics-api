@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 
-from disposable_email_domains import blocklist
-from email_validator import EmailNotValidError, validate_email
+from disposable_email_domains import blocklist # pyright: ignore[reportMissingImports]
+from email_validator import EmailNotValidError, validate_email # pyright: ignore[reportMissingImports]
 
 GENERIC_TEST_EMAILS = {
     "test@test.com",

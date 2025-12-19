@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.ad_accounts.service import count_user_accounts
 from fastapi import APIRouter, Depends, HTTPException, status # pyright: ignore[reportMissingImports]
 from sqlalchemy import and_, func
 from sqlalchemy.exc import IntegrityError
@@ -77,11 +78,3 @@ def create_ad_account(
     db.refresh(ad_account)
     return ad_account
 
-
-def count_user_accounts(user_id: int, db: Session) -> int:
-    return (
-        db.query(func.count(UserAdAccount.id))
-        .filter(UserAdAccount.user_id == user_id)
-        .scalar()
-        or 0
-    )

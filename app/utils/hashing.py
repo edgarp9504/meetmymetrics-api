@@ -1,4 +1,4 @@
-from passlib.context import CryptContext
+from passlib.context import CryptContext # pyright: ignore[reportMissingModuleSource]
 
 # Cambiamos a Argon2 (sin límite de longitud y más seguro que bcrypt)
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")

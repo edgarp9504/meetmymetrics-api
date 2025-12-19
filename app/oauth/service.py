@@ -6,7 +6,7 @@ from secrets import token_urlsafe
 from typing import Any, Dict, List, Optional
 
 import httpx
-from app.ad_accounts.router import count_user_accounts
+from app.ad_accounts.service import count_user_accounts
 from fastapi import HTTPException, Request, status # pyright: ignore[reportMissingImports]
 from fastapi.responses import RedirectResponse # pyright: ignore[reportMissingImports]
 from sqlalchemy import and_
