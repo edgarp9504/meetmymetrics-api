@@ -21,7 +21,7 @@ from app.oauth.providers.meta import MetaProvider
 from app.oauth.providers.tiktok import TikTokProvider
 from app.oauth.session_store import load_origin, store_origin, store_state, validate_state
 from app.utils.crypto import get_token_encryptor
-from models import AdAccount, ApiLog, OAuthToken, UserAdAccount
+from app.models import AdAccount, ApiLog, OAuthToken, UserAdAccount
 
 logger = logging.getLogger(__name__)
 

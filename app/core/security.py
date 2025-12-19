@@ -1,4 +1,4 @@
-from jose import jwt
+from jose import jwt # type: ignore
 from datetime import datetime, timedelta
 from app.core.config import settings
 

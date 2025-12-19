@@ -1,8 +1,8 @@
 import os
 from typing import Optional
 
-from azure.identity import DefaultAzureCredential
-from azure.keyvault.secrets import SecretClient
+from azure.identity import DefaultAzureCredential # pyright: ignore[reportMissingImports]
+from azure.keyvault.secrets import SecretClient # pyright: ignore[reportMissingImports]
 
 from dotenv import load_dotenv
 load_dotenv()
