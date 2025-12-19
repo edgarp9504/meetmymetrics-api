@@ -5,7 +5,7 @@ from typing import Optional
 
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
-from fastapi import Header, HTTPException, status
+from fastapi import Header, HTTPException, status # pyright: ignore[reportMissingImports]
 
 from app.core.security_keys import ALGORITHM, SECRET_KEY
 from app.db.connection import get_connection

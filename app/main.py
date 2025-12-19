@@ -1,11 +1,12 @@
+from fastapi import FastAPI # pyright: ignore[reportMissingImports]
+from fastapi.middleware.cors import CORSMiddleware # pyright: ignore[reportMissingImports]
+from starlette.middleware.sessions import SessionMiddleware # pyright: ignore[reportMissingImports]
 import os
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.sessions import SessionMiddleware
-
 from app.auth.router import router as auth_router
-from routers import accounts, ad_accounts, oauth
+from app.oauth.router import router as oauth_router, debug_router
+from app.ad_accounts import router as ad_accounts_router
+from app.accounts.router import router as accounts_router
 
 app = FastAPI(title="MeetMyMetrics API")
 
@@ -27,24 +28,11 @@ app.add_middleware(
 
 session_secret_key = os.getenv("SESSION_SECRET_KEY")
 if not session_secret_key:
-    raise RuntimeError("SESSION_SECRET_KEY must be set for session management")
+    raise RuntimeError("SESSION_SECRET_KEY must be set")
 
-required_env_vars = [
-    "GOOGLE_ADS_CLIENT_ID",
-    "GOOGLE_ADS_CLIENT_SECRET",
-    "GOOGLE_ADS_REDIRECT_URI",
-    "SESSION_SECRET_KEY",
-]
-missing_env_vars = [var for var in required_env_vars if not os.getenv(var)]
-if missing_env_vars:
-    missing = ", ".join(missing_env_vars)
-    raise RuntimeError(f"Missing required environment variables: {missing}")
-
-https_only = True
 env = os.getenv("ENV", "dev").lower()
 backend_url = os.getenv("BACKEND_URL", "")
-if env in {"dev", "local"} or backend_url.startswith("http://localhost"):
-    https_only = False
+https_only = not (env in {"dev", "local"} or backend_url.startswith("http://localhost"))
 
 app.add_middleware(
     SessionMiddleware,
@@ -56,7 +44,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router, prefix="/auth", tags=["Authentication"])
-app.include_router(oauth.router)
-app.include_router(oauth.debug_router)
-app.include_router(ad_accounts.router)
-app.include_router(accounts.router)
+app.include_router(oauth_router, tags=["OAuth"])
+app.include_router(debug_router, tags=["OAuth Debug"])
+app.include_router(ad_accounts_router, tags=["Ad Accounts"])
+app.include_router(accounts_router, tags=["Accounts"])

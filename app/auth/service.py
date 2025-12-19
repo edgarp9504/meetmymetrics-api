@@ -8,9 +8,9 @@ from typing import Deque, Dict, Optional
 from urllib.parse import urlencode, urlparse
 
 import jwt
-from authlib.integrations.starlette_client import OAuth, OAuthError
-from fastapi import HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from authlib.integrations.starlette_client import OAuth, OAuthError # pyright: ignore[reportMissingImports]
+from fastapi import HTTPException, Request # pyright: ignore[reportMissingImports]
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse # pyright: ignore[reportMissingImports]
 
 from app.auth.schemas import (
     UpdatePasswordRequest,

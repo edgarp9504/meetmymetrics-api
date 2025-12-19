@@ -6,8 +6,9 @@ from secrets import token_urlsafe
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from app.ad_accounts.router import count_user_accounts
+from fastapi import HTTPException, Request, status # pyright: ignore[reportMissingImports]
+from fastapi.responses import RedirectResponse # pyright: ignore[reportMissingImports]
 from sqlalchemy import and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -226,8 +227,6 @@ def connect_account(
     user: Any,
 ) -> Dict[str, str]:
     normalized_provider = normalize_provider(provider)
-
-    from routers.ad_accounts import count_user_accounts
 
     ad_account = (
         db.query(AdAccount)

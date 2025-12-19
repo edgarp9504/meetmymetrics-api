@@ -1,5 +1,5 @@
 """Authentication related schemas and routes."""
 
-from app.oauth.router import router
+from app.ad_accounts.router import router
 
 __all__ = ["router"]

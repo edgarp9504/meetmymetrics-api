@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Header, Request
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Header, Request # pyright: ignore[reportMissingImports]
+from fastapi.responses import RedirectResponse # pyright: ignore[reportMissingImports]
 
 from app.auth import service
 from app.auth.schemas import UpdatePasswordRequest, UserLogin, UserRegister, VerifyCodeRequest
